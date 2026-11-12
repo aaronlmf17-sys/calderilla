@@ -1,0 +1,42 @@
+name: Paquete para Google Play (AAB)
+
+# Se lanza a mano: Actions → "Paquete para Google Play (AAB)" → Run workflow.
+# El archivo calderilla.aab aparece al final, en "Artifacts", listo para subirlo a Play Console.
+on:
+  workflow_dispatch:
+
+jobs:
+  aab:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npm test
+      - run: unzip -q -o android.zip
+      - run: npx cap sync android
+      - name: Preparar la clave de firma (clave de subida de Play)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE_BASE64" | base64 -d > android/app/calderilla.keystore
+      - name: Compilar AAB firmado
+        working-directory: android
+        env:
+          CALDERILLA_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          # Empieza en 1001 para ir siempre por encima de las versiones del APK
+          export VERSION_CODE=$((1000 + ${{ github.run_number }}))
+          chmod +x gradlew
+          ./gradlew bundleRelease --no-daemon --stacktrace
+          cp app/build/outputs/bundle/release/app-release.aab ../calderilla.aab
+      - uses: actions/upload-artifact@v4
+        with:
+          name: calderilla-aab
+          path: calderilla.aab
