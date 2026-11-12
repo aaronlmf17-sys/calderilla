@@ -1,0 +1,89 @@
+name: Compilar y publicar Calderilla
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # crear la Release con el APK
+  pages: write      # publicar la web
+  id-token: write
+
+concurrency:
+  group: calderilla-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: App Android (APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Pruebas del lector (notificaciones y extractos)
+        run: npm test
+
+      - name: Restaurar el proyecto Android
+        run: unzip -q -o android.zip
+
+      - name: Copiar la web a Android
+        run: npx cap sync android
+
+      - name: Preparar la clave de firma
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Falta el secreto KEYSTORE_BASE64. Mira el apartado 2 de LEEME.md"; exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/calderilla.keystore
+
+      - name: Compilar APK firmado
+        working-directory: android
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          CALDERILLA_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk ../calderilla.apk
+
+      - name: Publicar Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v3.${{ github.run_number }}
+          name: Calderilla 3.${{ github.run_number }}
+          body: |
+            Descarga **calderilla.apk** desde el móvil Android e instálala.
+            Si ya la tenías, se actualiza sin perder datos.
+          files: calderilla.apk
+          make_latest: true
+
+  web:
+    name: Web (GitHub Pages)
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: www
+      - id: deploy
+        uses: actions/deploy-pages@v4
