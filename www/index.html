@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Calderilla</title>
+<meta name="theme-color" content="#f4f2ec" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121614" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Calderilla">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">◉</span> Calderilla</div>
+  <div class="top-sub" id="topSub"></div>
+</header>
+
+<main id="main">
+  <!-- INICIO -->
+  <section class="view" id="view-inicio">
+    <div class="hero card">
+      <div class="hero-label" id="heroLabel">Gastado este mes</div>
+      <div class="hero-amount" id="heroAmount">0 €</div>
+      <div class="hero-meta" id="heroMeta"></div>
+      <div class="meter" id="heroMeter" hidden><div class="meter-fill"></div></div>
+    </div>
+
+    <div id="alerts"></div>
+
+    <form class="quick card" id="quickForm" autocomplete="off">
+      <div class="quick-row">
+        <input id="quickInput" type="text" inputmode="text" enterkeyhint="done"
+               placeholder="café 1,80 · súper 45 ayer · ahorro viaje 50" aria-label="Añadir gasto">
+        <label class="icon-btn" title="Foto del ticket" aria-label="Foto del ticket">
+          <input type="file" id="ticketInput" accept="image/*" capture="environment" hidden>
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M9 3 7.2 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9Zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
+        </label>
+      </div>
+      <div class="preview" id="preview" hidden>
+        <button type="button" class="chip cat-chip" id="previewCat"></button>
+        <span class="preview-text" id="previewText"></span>
+        <button type="submit" class="btn-add" id="addBtn">Añadir</button>
+      </div>
+      <div class="cat-picker" id="catPicker" hidden></div>
+      <div class="auto" id="autoList"></div>
+      <div class="ocr-status" id="ocrStatus" hidden></div>
+    </form>
+
+    <div class="section-title" id="shortcutsTitle">Atajos <span class="hint">un toque y apuntado</span></div>
+    <div class="shortcuts" id="shortcuts"></div>
+
+    <div class="section-title">Últimos movimientos <button class="link" data-goto="movimientos">Ver todos</button></div>
+    <div class="card list" id="recentList"></div>
+  </section>
+
+  <!-- MOVIMIENTOS -->
+  <section class="view" id="view-movimientos" hidden>
+    <div class="month-switch"><button class="round" data-month="-1" aria-label="Mes anterior">‹</button><span class="month-label"></span><button class="round" data-month="1" aria-label="Mes siguiente">›</button></div>
+    <div class="search-row"><input class="search" id="search" type="search" placeholder="Buscar…"><label class="btn-ghost" title="Importar extracto del banco">⬆︎ Extracto<input type="file" id="bankInput2" accept=".csv,.xls,.xlsx,.txt,.ods,text/csv" hidden></label></div>
+    <div id="movList"></div>
+  </section>
+
+  <!-- ANÁLISIS -->
+  <section class="view" id="view-analisis" hidden>
+    <div class="month-switch"><button class="round" data-month="-1" aria-label="Mes anterior">‹</button><span class="month-label"></span><button class="round" data-month="1" aria-label="Mes siguiente">›</button></div>
+    <div class="card" id="summaryCard"></div>
+    <div class="section-title">Por categoría <span class="hint">toca para fijar un límite</span></div>
+    <div class="card" id="catBars"></div>
+    <div class="section-title">Día a día</div>
+    <div class="card" id="dailyChart"></div>
+    <div class="section-title">Suscripciones y pagos fijos</div>
+    <div class="card" id="subsList"></div>
+    <div class="section-title">¿Dónde puedes ahorrar? <span class="hint">últimos 60 días</span></div>
+    <div class="card" id="habitsList"></div>
+  </section>
+
+  <!-- METAS -->
+  <section class="view" id="view-metas" hidden>
+    <div class="card" id="goalsHead"></div>
+    <div id="goalsList"></div>
+    <button class="btn-primary" id="newGoal" style="margin-top:4px">+ Nueva meta</button>
+  </section>
+
+  <!-- AJUSTES -->
+  <section class="view" id="view-ajustes" hidden>
+    <div class="section-title" style="margin-top:6px">Automático <span class="hint">sin dar claves del banco</span></div>
+    <div class="card settings">
+      <div id="bankBox"></div>
+      <div class="set-row"><div><b>Probar con una notificación</b><div class="muted">Pega el texto de un aviso de tu banco</div></div><button class="btn-ghost" id="bankTestBtn">Probar</button></div>
+    </div>
+    <div class="card settings">
+      <div class="set-row"><div><b>Presupuesto mensual</b><div class="muted">Te aviso al 80 % y al 100 %</div></div><button class="btn-ghost" id="setMonthly"></button></div>
+      <div class="set-row"><div><b>Categorías</b><div class="muted" id="catsCount"></div></div><button class="btn-ghost" id="catsBtn">Editar</button></div>
+      <div class="set-row"><div><b>Importar extracto del banco</b><div class="muted">CSV o Excel descargado de tu banco</div></div><label class="btn-ghost">Elegir<input type="file" id="bankInput" accept=".csv,.xls,.xlsx,.txt,.ods,text/csv" hidden></label></div>
+      <div class="set-row"><div><b>Copia de seguridad</b><div class="muted">Tus datos solo viven en este móvil</div></div><div class="btns"><button class="btn-ghost" id="exportBtn">Exportar</button><label class="btn-ghost">Importar<input type="file" id="importInput" accept="application/json,.json" hidden></label></div></div>
+      <div class="set-row"><div><b>Datos de ejemplo</b><div class="muted">Para probar el análisis</div></div><button class="btn-ghost" id="demoBtn">Cargar</button></div>
+      <div class="set-row"><div><b>Borrar todo</b><div class="muted">No se puede deshacer</div></div><button class="btn-ghost danger" id="wipeBtn">Borrar</button></div>
+    </div>
+    <div class="section-title">Avisos <span class="hint">Android</span></div>
+    <div class="card settings">
+      <div class="set-row"><div><b>Notificaciones</b><div class="muted" id="notifStatus"></div></div><button class="btn-ghost" id="notifBtn" hidden>Activar</button></div>
+      <div class="set-row"><label class="check" style="margin:0"><input type="checkbox" id="nDaily"> Recordarme apuntar los gastos si no he apuntado nada</label><select id="nHour" class="sel"></select></div>
+      <div class="set-row"><label class="check" style="margin:0"><input type="checkbox" id="nSubs"> Avisarme el día antes de cada cobro fijo (Netflix, gimnasio…)</label></div>
+    </div>
+    <div class="card tips">
+      <b>Trucos de escritura rápida</b>
+      <ul>
+        <li><code>café 1,80</code> → Cafés, hoy</li>
+        <li><code>súper 45 ayer</code> · <code>gasolina 60 el lunes</code> · <code>cena 30 3/11</code></li>
+        <li><code>+1500 nómina</code> → ingreso</li>
+        <li><code>ahorro viaje 50</code> → aporta 50 € a tu meta «Viaje»</li>
+        <li>Si cambias la categoría de algo, la app lo aprende para la próxima vez.</li>
+      </ul>
+    </div>
+    <p class="muted center small" id="storageInfo"></p>
+  </section>
+</main>
+
+<button class="fab" id="fab" aria-label="Añadir gasto" hidden>+</button>
+
+<nav class="tabs">
+  <button data-tab="inicio" class="active"><svg viewBox="0 0 24 24"><path d="M12 3 3 10v10h6v-6h6v6h6V10z"/></svg>Inicio</button>
+  <button data-tab="movimientos"><svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/></svg>Movimientos</button>
+  <button data-tab="analisis"><svg viewBox="0 0 24 24"><path d="M5 20V10h3v10zm5.5 0V4h3v16zM16 20v-7h3v7z"/></svg>Análisis</button>
+  <button data-tab="metas"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm0-14a6 6 0 1 0 6 6 6 6 0 0 0-6-6zm0 10a4 4 0 1 1 4-4 4 4 0 0 1-4 4zm0-6a2 2 0 1 0 2 2 2 2 0 0 0-2-2z"/></svg>Metas</button>
+  <button data-tab="ajustes"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.7 7.7 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.7 7.7 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.4-2.7c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>Ajustes</button>
+</nav>
+
+<div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+<div class="sheet" id="sheet" hidden role="dialog" aria-modal="true"></div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="vendor/capacitor.js"></script>
+<script src="parser.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
