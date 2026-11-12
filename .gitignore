@@ -1,0 +1,7 @@
+node_modules/
+secretos/
+*.keystore
+*.jks
+*.apk
+.DS_Store
+android/
