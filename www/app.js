@@ -12,6 +12,7 @@
   const essentialIds = () => cats().filter(c => c.essential).map(c => c.id);
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+  const safeColor = c => /^#[0-9a-f]{6}$/i.test(c) ? c : '#868e96';
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' });
   const fmt0 = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
@@ -27,15 +28,72 @@
   const blank = () => ({ v: 2, expenses: [], budgets: {}, learned: {}, decisions: {}, goals: [], categories: defaultCats(),
     settings: { monthlyBudget: null }, notif: { daily: true, hour: 21, subs: true }, inbox: [],
     bank: { enabled: false, auto: true, packages: {}, discovered: {}, discoverUntil: 0, seen: [] } });
+  /* Seguridad: todo lo que se carga (almacenamiento o copia importada) pasa por aquí.
+     Solo se conservan campos conocidos, con tipo, formato y longitud válidos. */
+  const ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/i, COLOR_RE = /^#[0-9a-f]{6}$/i, DATE_RE = /^\d{4}-\d{2}-\d{2}$/, YM_RE = /^\d{4}-\d{2}$/;
+  const PKG_RE = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+){1,10}$/i;
+  const MAX_CENTS = 1e11;
+  const safeLabel = (v, max) => String(v == null ? '' : v).replace(/[<>"'`&\\\u0000-\u001f\u007f]/g, '').trim().slice(0, max);
+  const safeText = (v, max) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max);
+  const posCents = v => (typeof v === 'number' && Number.isFinite(v) && v > 0 && v < MAX_CENTS) ? Math.round(v) : null;
+  const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
+  const ownEntries = o => isObj(o) ? Object.keys(o).filter(k => k !== '__proto__' && k !== 'constructor' && k !== 'prototype').map(k => [k, o[k]]) : [];
   function upgrade(d) {
-    const b = blank(), o = Object.assign(b, d);
-    o.settings = Object.assign(blank().settings, d.settings || {});
-    o.notif = Object.assign(blank().notif, d.notif || {});
-    if (!Array.isArray(o.categories) || !o.categories.length) o.categories = defaultCats();
+    d = isObj(d) ? d : {};
+    const o = blank();
+    // categorías
+    const seen = new Set();
+    const cs = [];
+    for (const c of (Array.isArray(d.categories) ? d.categories : [])) {
+      if (!isObj(c) || !ID_RE.test(String(c.id)) || c.id === 'ingreso' || seen.has(c.id)) continue;
+      seen.add(c.id);
+      cs.push({ id: c.id, name: safeLabel(c.name, 30) || c.id, emoji: safeLabel(c.emoji, 8) || '🏷️', color: COLOR_RE.test(c.color) ? c.color : '#868e96',
+        essential: c.essential === true, kw: (Array.isArray(c.kw) ? c.kw : []).slice(0, 200).map(k => safeLabel(k, 40)).filter(Boolean) });
+      if (cs.length >= 60) break;
+    }
+    o.categories = cs.length ? cs : defaultCats();
     if (!o.categories.some(c => c.id === 'otros')) o.categories.push(defaultCats().find(c => c.id === 'otros'));
-    if (!Array.isArray(o.goals)) o.goals = [];
-    o.bank = Object.assign(blank().bank, d.bank || {});
-    if (!Array.isArray(o.inbox)) o.inbox = [];
+    const catIds = new Set(o.categories.map(c => c.id));
+    // movimientos y bandeja
+    const mov = e => {
+      if (!isObj(e)) return null;
+      const amount = posCents(e.amount);
+      if (!amount || !DATE_RE.test(String(e.date))) return null;
+      const type = e.type === 'income' ? 'income' : 'expense';
+      const r = { id: ID_RE.test(String(e.id)) ? e.id : uid(), amount, desc: safeText(e.desc, 80) || 'Movimiento', date: e.date,
+        ts: (typeof e.ts === 'number' && Number.isFinite(e.ts)) ? e.ts : +H.fromISO(e.date), type,
+        cat: type === 'income' ? 'ingreso' : (catIds.has(e.cat) ? e.cat : 'otros') };
+      if (e.src === 'banco') r.src = 'banco';
+      if (e.bank) r.bank = safeLabel(e.bank, 30);
+      if (e.raw) r.raw = safeText(e.raw, 200);
+      if (ID_RE.test(String(e.imp))) r.imp = e.imp;
+      if (['high', 'medium', 'low'].includes(e.confidence)) r.confidence = e.confidence;
+      return r;
+    };
+    o.expenses = (Array.isArray(d.expenses) ? d.expenses : []).slice(0, 200000).map(mov).filter(Boolean);
+    o.inbox = (Array.isArray(d.inbox) ? d.inbox : []).slice(0, 500).map(mov).filter(Boolean);
+    for (const [k, v] of ownEntries(d.budgets)) if (catIds.has(k) && posCents(v)) o.budgets[k] = posCents(v);
+    for (const [k, v] of ownEntries(d.learned)) { const nk = H.normalize(k).slice(0, 80); if (nk && catIds.has(v)) o.learned[nk] = v; }
+    for (const [k, v] of ownEntries(d.decisions)) { const nk = safeLabel(k, 80); if (nk && v === 'cut') o.decisions[nk] = 'cut'; }
+    // metas
+    o.goals = (Array.isArray(d.goals) ? d.goals : []).slice(0, 50).map(g => {
+      if (!isObj(g) || !posCents(g.target)) return null;
+      return { id: ID_RE.test(String(g.id)) ? g.id : uid(), name: safeLabel(g.name, 40) || 'Meta', emoji: safeLabel(g.emoji, 8) || '🎯',
+        target: posCents(g.target), deadline: YM_RE.test(String(g.deadline)) ? g.deadline : null, created: DATE_RE.test(String(g.created)) ? g.created : todayISO(),
+        entries: (Array.isArray(g.entries) ? g.entries : []).slice(0, 5000).filter(x => isObj(x) && DATE_RE.test(String(x.date)) && Number.isFinite(x.amount) && Math.abs(x.amount) < MAX_CENTS && x.amount !== 0)
+          .map(x => ({ id: ID_RE.test(String(x.id)) ? x.id : uid(), date: x.date, amount: Math.round(x.amount) })) };
+    }).filter(Boolean);
+    // ajustes
+    const st = isObj(d.settings) ? d.settings : {};
+    o.settings.monthlyBudget = posCents(st.monthlyBudget);
+    const nf = isObj(d.notif) ? d.notif : {};
+    o.notif = { daily: nf.daily !== false, hour: Number.isInteger(nf.hour) && nf.hour >= 0 && nf.hour <= 23 ? nf.hour : 21, subs: nf.subs !== false };
+    const bk = isObj(d.bank) ? d.bank : {};
+    o.bank.enabled = bk.enabled === true; o.bank.auto = bk.auto !== false;
+    for (const [k, v] of ownEntries(bk.packages)) if (PKG_RE.test(k) && typeof v === 'boolean') o.bank.packages[k] = v;
+    for (const [k, v] of ownEntries(bk.discovered)) if (PKG_RE.test(k) && isObj(v)) o.bank.discovered[k] = { count: Math.min(1e6, Math.max(0, parseInt(v.count, 10) || 0)), last: Number(v.last) || 0, sample: safeText(v.sample, 140) };
+    o.bank.discoverUntil = Math.min(Number(bk.discoverUntil) || 0, Date.now() + 48 * 3600000);
+    o.bank.seen = (Array.isArray(bk.seen) ? bk.seen : []).filter(x => typeof x === 'string' && /^[a-z0-9]{1,14}$/.test(x)).slice(-400);
     return o;
   }
   let memoryOnly = false;
@@ -94,7 +152,7 @@
     if (item.desc && item.type !== 'income') S.learned[H.normalize(item.desc)] = item.cat;
     save();
     const c = catById(item.cat);
-    toast(c.emoji + ' ' + esc(item.desc || c.name) + ' · ' + money(item.amount), 'Deshacer', () => {
+    toast(esc(c.emoji) + ' ' + esc(item.desc || c.name) + ' · ' + money(item.amount), 'Deshacer', () => {
       S.expenses = S.expenses.filter(x => x.id !== item.id); save(); renderAll();
     });
     checkBudgetCross(item);
@@ -116,7 +174,7 @@
         }
       }
     };
-    check(S.budgets[item.cat], spentIn(y, m, item.cat), 'tu límite de ' + catById(item.cat).name.toLowerCase());
+    check(S.budgets[item.cat], spentIn(y, m, item.cat), 'tu límite de ' + esc(catById(item.cat).name.toLowerCase()));
     check(S.settings.monthlyBudget, spentIn(y, m), 'tu presupuesto del mes');
   }
 
@@ -156,7 +214,7 @@
     if (draft && draft.goal) { switchTab('metas'); return; }
     const p = $('#catPicker');
     if (!p.hidden) { p.hidden = true; return; }
-    p.innerHTML = cats().map(c => '<button type="button" class="chip' + (draft && draft.cat === c.id ? ' sel' : '') + '" data-cat="' + c.id + '">' + c.emoji + ' ' + c.name + '</button>').join('')
+    p.innerHTML = cats().map(c => '<button type="button" class="chip' + (draft && draft.cat === c.id ? ' sel' : '') + '" data-cat="' + esc(c.id) + '">' + esc(c.emoji + ' ' + c.name) + '</button>').join('')
       + '<button type="button" class="chip' + (draft && draft.type === 'income' ? ' sel' : '') + '" data-cat="ingreso">💶 Es un ingreso</button>';
     p.hidden = false;
   };
@@ -173,7 +231,7 @@
     const words = txt.replace(/[\d.,€]+/g, ' ').trim();
     if (!words || words.length < 2) { box.innerHTML = ''; return; }
     const items = H.autocomplete(S.expenses, words, 3).filter(a => H.normalize(a.desc) !== H.normalize(draft && draft.desc));
-    box.innerHTML = items.map(a => '<button type="button" data-k="' + esc(a.key) + '"><span>' + catById(a.cat).emoji + ' ' + esc(a.desc) + '</span><span>' + money(a.amount) + '</span></button>').join('');
+    box.innerHTML = items.map(a => '<button type="button" data-k="' + esc(a.key) + '"><span>' + esc(catById(a.cat).emoji) + ' ' + esc(a.desc) + '</span><span>' + money(a.amount) + '</span></button>').join('');
     box.onclick = ev => {
       const b = ev.target.closest('button'); if (!b) return;
       const a = items.find(i => i.key === b.dataset.k);
@@ -190,7 +248,7 @@
     if (tessLoading) return tessLoading;
     tessLoading = new Promise((res, rej) => {
       const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+      s.src = 'vendor/tesseract/tesseract.min.js';
       s.onload = res; s.onerror = () => { tessLoading = null; rej(new Error('no se pudo cargar el lector')); };
       document.head.appendChild(s);
     });
@@ -216,6 +274,9 @@
       await loadTesseract();
       const canvas = await prepImage(file);
       const { data } = await window.Tesseract.recognize(canvas, 'spa', {
+        workerPath: new URL('vendor/tesseract/worker.min.js', location.href).href,
+        corePath: new URL('vendor/tesseract/', location.href).href,
+        langPath: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/spa/4.0.0_best_int',
         logger: m => { if (m.status === 'recognizing text') st.textContent = '📷 Leyendo el ticket… ' + Math.round(m.progress * 100) + ' %'; }
       });
       const r = H.parseReceipt(data.text);
@@ -234,8 +295,8 @@
   function rowHTML(e, showDate) {
     const c = catById(e.cat);
     const date = H.fromISO(e.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
-    return '<button class="row" data-id="' + e.id + '"><span class="em" style="background:' + c.color + '22">' + c.emoji + '</span>'
-      + '<span class="mid"><div class="d">' + esc(e.desc) + '</div><div class="s">' + c.name + (showDate ? ' · ' + date : '') + (e.src === 'banco' ? ' · 🔔' : '') + '</div></span>'
+    return '<button class="row" data-id="' + esc(e.id) + '"><span class="em" style="background:' + safeColor(c.color) + '22">' + esc(c.emoji) + '</span>'
+      + '<span class="mid"><div class="d">' + esc(e.desc) + '</div><div class="s">' + esc(c.name) + (showDate ? ' · ' + date : '') + (e.src === 'banco' ? ' · 🔔' : '') + '</div></span>'
       + '<span class="amt' + (e.type === 'income' ? ' inc' : '') + '">' + (e.type === 'income' ? '+' : '−') + money(e.amount) + '</span></button>';
   }
   const sortDesc = (a, b) => b.date.localeCompare(a.date) || (b.ts || 0) - (a.ts || 0);
@@ -264,8 +325,8 @@
     for (const [cat, lim] of Object.entries(S.budgets)) {
       if (!lim) continue;
       const s = spentIn(y, m, cat), r = s / lim, c = catById(cat);
-      if (r >= 1) al.push('<div class="alert over">🚨 ' + c.emoji + ' ' + c.name + ': ' + money0(s) + ' de ' + money0(lim) + '. Te has pasado ' + money0(s - lim) + '.</div>');
-      else if (r >= 0.8) al.push('<div class="alert">⚠️ ' + c.emoji + ' ' + c.name + ': llevas el ' + Math.round(r * 100) + ' % (' + money0(lim - s) + ' disponibles)</div>');
+      if (r >= 1) al.push('<div class="alert over">🚨 ' + esc(c.emoji + ' ' + c.name) + ': ' + money0(s) + ' de ' + money0(lim) + '. Te has pasado ' + money0(s - lim) + '.</div>');
+      else if (r >= 0.8) al.push('<div class="alert">⚠️ ' + esc(c.emoji + ' ' + c.name) + ': llevas el ' + Math.round(r * 100) + ' % (' + money0(lim - s) + ' disponibles)</div>');
     }
     if (S.inbox.length) al.unshift('<button class="alert inbox" id="inboxBtn">📥 ' + S.inbox.length + (S.inbox.length === 1 ? ' movimiento del banco' : ' movimientos del banco') + ' por revisar <b>Revisar ›</b></button>');
     $('#alerts').innerHTML = al.join('');
@@ -275,7 +336,7 @@
     const sugg = H.buildSuggestions(S.expenses, new Date(), 6);
     $('#shortcuts').innerHTML = sugg.length ? sugg.map(s => {
       const c = catById(s.cat);
-      return '<button class="shortcut" data-k="' + esc(s.key) + '"><span class="em">' + c.emoji + '</span><div><div class="t">' + esc(s.desc) + '</div><div class="a">' + money(s.amount) + '</div></div></button>';
+      return '<button class="shortcut" data-k="' + esc(s.key) + '"><span class="em">' + esc(c.emoji) + '</span><div><div class="t">' + esc(s.desc) + '</div><div class="a">' + money(s.amount) + '</div></div></button>';
     }).join('') : '<div class="empty">Aquí aparecerán los gastos que repites (el café, el súper, la gasolina…) con su importe habitual, ordenados según la hora y el día. Un toque y apuntado.</div>';
     $('#shortcuts').onclick = ev => {
       const b = ev.target.closest('.shortcut'); if (!b) return;
@@ -328,7 +389,7 @@
       const paint = () => {
         $$('.seg button', sh).forEach(b => b.classList.toggle('on', b.dataset.t === type));
         $('#edCatWrap', sh).hidden = type === 'income';
-        $('#edCats', sh).innerHTML = cats().map(c => '<button class="chip' + (cat === c.id ? ' sel' : '') + '" data-cat="' + c.id + '">' + c.emoji + ' ' + c.name + '</button>').join('');
+        $('#edCats', sh).innerHTML = cats().map(c => '<button class="chip' + (cat === c.id ? ' sel' : '') + '" data-cat="' + esc(c.id) + '">' + esc(c.emoji + ' ' + c.name) + '</button>').join('');
       };
       paint();
       $('.seg', sh).onclick = ev => { const b = ev.target.closest('button'); if (b) { type = b.dataset.t; if (type === 'expense' && cat === 'ingreso') cat = H.guessCategory($('#edDesc', sh).value, S.learned, cats()); paint(); } };
@@ -336,7 +397,8 @@
       $('#edSave', sh).onclick = () => {
         const amt = H.parseAmountStr($('#edAmount', sh).value);
         if (!amt || amt <= 0) { $('#edAmount', sh).focus(); return; }
-        e.amount = amt; e.desc = $('#edDesc', sh).value.trim() || catById(cat).name; e.date = $('#edDate', sh).value || e.date;
+        if (amt >= MAX_CENTS) return $('#edAmount', sh).focus();
+        e.amount = amt; e.desc = safeText($('#edDesc', sh).value, 80) || catById(cat).name; e.date = DATE_RE.test($('#edDate', sh).value) ? $('#edDate', sh).value : e.date;
         e.type = type; e.cat = type === 'income' ? 'ingreso' : cat;
         if (type !== 'income') S.learned[H.normalize(e.desc)] = e.cat;
         save(); closeSheet(); renderAll(); toast('Guardado');
@@ -376,8 +438,8 @@
     $('#catBars').innerHTML = byCat.length ? byCat.map(({ c, s, lim }) => {
       let limTxt = '';
       if (lim) { const r = s / lim; limTxt = '<div class="bar-limit ' + (r >= 1 ? 'over' : r >= 0.8 ? 'warn' : '') + '">Límite ' + money0(lim) + ' · ' + (r >= 1 ? 'te has pasado ' + money0(s - lim) : 'quedan ' + money0(lim - s)) + '</div>'; }
-      return '<button class="bar-row" data-cat="' + c.id + '"><div class="bar-top"><span>' + c.emoji + ' ' + c.name + '</span><b>' + money(s) + (spent ? ' <span class="muted">' + Math.round(s / spent * 100) + ' %</span>' : '') + '</b></div>'
-        + '<div class="bar"><i style="width:' + (s / max * 100) + '%;background:' + c.color + '"></i></div>' + limTxt + '</button>';
+      return '<button class="bar-row" data-cat="' + esc(c.id) + '"><div class="bar-top"><span>' + esc(c.emoji + ' ' + c.name) + '</span><b>' + money(s) + (spent ? ' <span class="muted">' + Math.round(s / spent * 100) + ' %</span>' : '') + '</b></div>'
+        + '<div class="bar"><i style="width:' + (s / max * 100) + '%;background:' + safeColor(c.color) + '"></i></div>' + limTxt + '</button>';
     }).join('') + '<button class="link" id="addLimit" style="margin-top:8px">+ Poner límite a otra categoría</button>' : '<div class="empty">Sin gastos este mes.</div>';
     $('#catBars').onclick = ev => {
       if (ev.target.id === 'addLimit') return pickCatForLimit();
@@ -398,14 +460,14 @@
     const rec = H.detectRecurring(S.expenses, new Date());
     const recActive = rec.filter(r => r.active);
     const yearlyFixed = recActive.reduce((s, r) => s + r.yearly, 0);
-    $('#subsList').innerHTML = recActive.length ? recActive.map(r => saveItemHTML(r.key, catById(r.cat).emoji + ' ' + esc(r.desc) + (r.probable ? '<span class="tag">¿mensual?</span>' : ''),
+    $('#subsList').innerHTML = recActive.length ? recActive.map(r => saveItemHTML(r.key, esc(catById(r.cat).emoji) + ' ' + esc(r.desc) + (r.probable ? '<span class="tag">¿mensual?</span>' : ''),
       money(r.amount) + ' ' + r.period + ' · <b>' + money0(r.yearly) + '/año</b> · próximo ~' + H.fromISO(r.next).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }), r.yearly)).join('')
       + '<div class="savings-total">Tus pagos fijos suman <b>' + money0(yearlyFixed) + '</b> al año (' + money0(yearlyFixed / 12) + '/mes).</div>'
       : '<div class="empty">Cuando un pago se repita (Netflix, gimnasio, seguro…) lo detectaré solo y te diré cuánto te cuesta al año.</div>';
 
     // hábitos / dónde ahorrar
     const hab = H.detectHabits(S.expenses, new Date(), rec.map(r => r.key), essentialIds());
-    $('#habitsList').innerHTML = hab.length ? hab.slice(0, 8).map(h => saveItemHTML(h.key, catById(h.cat).emoji + ' ' + esc(h.desc) + (h.ant ? '<span class="tag">hormiga</span>' : ''),
+    $('#habitsList').innerHTML = hab.length ? hab.slice(0, 8).map(h => saveItemHTML(h.key, esc(catById(h.cat).emoji) + ' ' + esc(h.desc) + (h.ant ? '<span class="tag">hormiga</span>' : ''),
       h.perMonth.toString().replace('.', ',') + ' veces/mes · media ' + money(h.avg) + ' · <b>' + money0(h.yearly) + '/año</b>', h.yearly)).join('')
       : '<div class="empty">Con unas semanas de datos te enseñaré tus hábitos de gasto (cafés, comida a domicilio, caprichos…) y cuánto suman al año, para que decidas cuáles recortar.</div>';
 
@@ -432,7 +494,7 @@
   function limitSheet(catId) {
     const c = catById(catId), cur = S.budgets[catId];
     const avg = (() => { let t = 0; for (let i = 1; i <= 3; i++) { const d = new Date(viewMonth.y, viewMonth.m - i, 1); t += spentIn(d.getFullYear(), d.getMonth(), catId); } return t / 3; })();
-    openSheet('<h3>' + c.emoji + ' Límite mensual de ' + c.name.toLowerCase() + '</h3>'
+    openSheet('<h3>' + esc(c.emoji) + ' Límite mensual de ' + esc(c.name.toLowerCase()) + '</h3>'
       + (avg ? '<p class="muted">Los últimos 3 meses has gastado de media ' + money0(avg) + '.</p>' : '')
       + '<label class="field"><span>Límite (€ al mes)</span><input id="limIn" inputmode="decimal" value="' + (cur ? cur / 100 : '') + '" placeholder="' + (avg ? Math.round(avg / 100 * 0.85) : '100') + '"></label>'
       + '<div class="actions">' + (cur ? '<button class="btn-ghost danger" id="limDel">Quitar</button>' : '') + '<button class="btn-primary" id="limSave">Guardar</button></div>', sh => {
@@ -442,7 +504,7 @@
     });
   }
   function pickCatForLimit() {
-    openSheet('<h3>¿A qué categoría?</h3><div class="cat-picker">' + cats().map(c => '<button class="chip" data-cat="' + c.id + '">' + c.emoji + ' ' + c.name + '</button>').join('') + '</div>', sh => {
+    openSheet('<h3>¿A qué categoría?</h3><div class="cat-picker">' + cats().map(c => '<button class="chip" data-cat="' + esc(c.id) + '">' + esc(c.emoji + ' ' + c.name) + '</button>').join('') + '</div>', sh => {
       $('.cat-picker', sh).onclick = ev => { const b = ev.target.closest('[data-cat]'); if (b) limitSheet(b.dataset.cat); };
     });
   }
@@ -471,8 +533,16 @@
   $('#exportBtn').onclick = () => {
     const json = JSON.stringify(S);
     if (NATIVE) {
-      navigator.clipboard.writeText(json).then(() => toast('Copia copiada. Pégala en un correo o nota para guardarla.', null, null, 6000))
-        .catch(() => toast('No he podido copiar la copia de seguridad'));
+      // Se guarda como archivo y se abre el menú de compartir del sistema (Drive, correo…).
+      // No se usa el portapapeles: otras apps podrían leerlo.
+      (async () => {
+        try {
+          const FS = Cap.registerPlugin('Filesystem'), SH = Cap.registerPlugin('Share');
+          const name = 'export/calderilla-copia-' + todayISO() + '.json';
+          const r = await FS.writeFile({ path: name, data: json, directory: 'CACHE', encoding: 'utf8', recursive: true });
+          await SH.share({ title: 'Copia de seguridad de Calderilla', files: [r.uri], dialogTitle: 'Guardar la copia en…' });
+        } catch (e) { if (!/cancel/i.test(String(e && e.message))) toast('No he podido exportar la copia'); }
+      })();
       return;
     }
     try {
@@ -482,10 +552,10 @@
       document.body.appendChild(a); a.click(); a.remove();
       toast('Copia descargada');
     } catch (e) {}
-    try { navigator.clipboard && navigator.clipboard.writeText(json); } catch (e) {}
   };
   $('#importInput').addEventListener('change', async ev => {
     const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
+    if (f.size > 20 * 1024 * 1024) return toast('El archivo es demasiado grande para ser una copia de Calderilla');
     try {
       const data = JSON.parse(await f.text());
       if (!Array.isArray(data.expenses)) throw new Error('formato');
@@ -608,10 +678,10 @@
       }
       return '<div class="card goal"><div class="goal-top"><span class="goal-em">' + esc(g.emoji || '🎯') + '</span><div class="mid"><div class="d">' + esc(g.name) + '</div>'
         + '<div class="s"><b>' + money0(saved) + '</b> de ' + money0(g.target) + ' · ' + Math.round(r * 100) + ' %</div></div>'
-        + '<button class="round small-round" data-gedit="' + g.id + '" aria-label="Editar">⋯</button></div>'
+        + '<button class="round small-round" data-gedit="' + esc(g.id) + '" aria-label="Editar">⋯</button></div>'
         + '<div class="bar goal-bar"><i style="width:' + (r * 100) + '%;background:var(--income)"></i></div>'
         + '<div class="goal-line">' + line + '</div>'
-        + '<div class="goal-actions"><button class="btn-ghost" data-gout="' + g.id + '">Retirar</button><button class="btn-add" data-gin="' + g.id + '">+ Aportar</button></div></div>';
+        + '<div class="goal-actions"><button class="btn-ghost" data-gout="' + esc(g.id) + '">Retirar</button><button class="btn-add" data-gin="' + esc(g.id) + '">+ Aportar</button></div></div>';
     }).join('');
   }
   $('#newGoal').onclick = () => goalSheet(null);
@@ -644,10 +714,10 @@
       + '<div class="actions">' + (isNew ? '' : '<button class="btn-ghost danger" id="gDel">Borrar</button>') + '<button class="btn-primary" id="gSave">Guardar</button></div>', sh => {
       if (isNew) setTimeout(() => $('#gName', sh).focus(), 50);
       $('#gSave', sh).onclick = () => {
-        const name = $('#gName', sh).value.trim(), target = H.parseAmountStr($('#gTarget', sh).value);
+        const name = safeLabel($('#gName', sh).value, 40), target = H.parseAmountStr($('#gTarget', sh).value);
         if (!name) return $('#gName', sh).focus();
-        if (!target || target <= 0) return $('#gTarget', sh).focus();
-        const em = $('#gEm', sh).value.trim() || '🎯', dl = $('#gDl', sh).value || null;
+        if (!target || target <= 0 || target >= MAX_CENTS) return $('#gTarget', sh).focus();
+        const em = safeLabel($('#gEm', sh).value, 8) || '🎯', dl = YM_RE.test($('#gDl', sh).value) ? $('#gDl', sh).value : null;
         if (isNew) {
           const ng = { id: uid(), name, emoji: em, target, deadline: dl, created: todayISO(), entries: [] };
           const init = H.parseAmountStr(($('#gInit', sh).value || '').trim());
@@ -666,7 +736,7 @@
   function categoriesSheet() {
     const counts = {}; S.expenses.forEach(e => { counts[e.cat] = (counts[e.cat] || 0) + 1; });
     openSheet('<h3>Tus categorías</h3><p class="muted small" style="margin-top:-6px">Toca una para cambiar nombre, icono o las palabras con las que la reconozco.</p><div class="list" id="catList">'
-      + cats().map(c => '<button class="row" data-ced="' + c.id + '"><span class="em" style="background:' + c.color + '22">' + esc(c.emoji) + '</span><span class="mid"><div class="d">' + esc(c.name) + (c.essential ? ' <span class="tag tag-ok">básica</span>' : '') + '</div><div class="s">' + (counts[c.id] || 0) + ' movimientos' + ((c.kw || []).length ? ' · ' + esc((c.kw || []).slice(0, 4).join(', ')) + (c.kw.length > 4 ? '…' : '') : '') + '</div></span><span class="muted">›</span></button>').join('')
+      + cats().map(c => '<button class="row" data-ced="' + esc(c.id) + '"><span class="em" style="background:' + safeColor(c.color) + '22">' + esc(c.emoji) + '</span><span class="mid"><div class="d">' + esc(c.name) + (c.essential ? ' <span class="tag tag-ok">básica</span>' : '') + '</div><div class="s">' + (counts[c.id] || 0) + ' movimientos' + ((c.kw || []).length ? ' · ' + esc((c.kw || []).slice(0, 4).join(', ')) + (c.kw.length > 4 ? '…' : '') : '') + '</div></span><span class="muted">›</span></button>').join('')
       + '</div><div class="actions" style="margin-top:12px"><button class="btn-ghost" id="catReset">Restaurar</button><button class="btn-primary" id="catNew">+ Nueva categoría</button></div>', sh => {
       $('#catList', sh).onclick = ev => { const b = ev.target.closest('[data-ced]'); if (b) categoryEditSheet(cats().find(c => c.id === b.dataset.ced)); };
       $('#catNew', sh).onclick = () => categoryEditSheet(null);
@@ -694,9 +764,9 @@
       if (isNew) setTimeout(() => $('#cName', sh).focus(), 50);
       $('#cBack', sh).onclick = categoriesSheet;
       $('#cSave', sh).onclick = () => {
-        const name = $('#cName', sh).value.trim(); if (!name) return $('#cName', sh).focus();
-        const data = { name, emoji: $('#cEm', sh).value.trim() || '🏷️', color, essential: $('#cEss', sh).checked,
-          kw: $('#cKw', sh).value.split(/[,\n]/).map(x => H.normalize(x)).filter(Boolean) };
+        const name = safeLabel($('#cName', sh).value, 30); if (!name) return $('#cName', sh).focus();
+        const data = { name, emoji: safeLabel($('#cEm', sh).value, 8) || '🏷️', color: safeColor(color), essential: $('#cEss', sh).checked,
+          kw: $('#cKw', sh).value.split(/[,\n]/).map(x => H.normalize(x).slice(0, 40)).filter(Boolean).slice(0, 200) };
         if (isNew) {
           let id = H.normalize(name).replace(/ /g, '-').slice(0, 20) || 'cat'; while (cats().some(x => x.id === id)) id += '-' + Math.random().toString(36).slice(2, 4);
           const otrosIdx = cats().findIndex(x => x.id === 'otros');
@@ -729,7 +799,7 @@
     if (xlsxLoading) return xlsxLoading;
     xlsxLoading = new Promise((res, rej) => {
       const s = document.createElement('script');
-      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+      s.src = 'vendor/xlsx.full.min.js';
       s.onload = res; s.onerror = () => { xlsxLoading = null; rej(new Error('no se pudo cargar el lector de Excel')); };
       document.head.appendChild(s);
     });
@@ -745,18 +815,19 @@
     const looksHtml = /^\s*</.test(decodeText(buf.slice(0, 200)));
     if (isZip || isOle || looksHtml || /\.(xlsx?|ods)$/i.test(file.name)) {
       await loadXLSX();
-      const wb = window.XLSX.read(buf, { type: 'array', cellDates: true });
+      const wb = window.XLSX.read(buf, { type: 'array', cellDates: true, cellFormula: false, cellHTML: false, sheetRows: 50000 });
       let best = null;
       for (const name of wb.SheetNames) {
         const rows = window.XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: '' });
         if (!best || rows.length > best.length) best = rows;
       }
-      return (best || []).map(r => r.map(v => (typeof v === 'string' ? v.trim() : v)));
+      return (best || []).slice(0, 50000).map(r => r.slice(0, 50).map(v => (typeof v === 'string' ? v.trim().slice(0, 500) : v)));
     }
-    return H.parseCSV(decodeText(buf));
+    return H.parseCSV(decodeText(buf)).slice(0, 50000).map(r => r.slice(0, 50).map(v => v.slice(0, 500)));
   }
   async function onStatementFile(ev) {
     const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
+    if (f.size > 15 * 1024 * 1024) return toast('El extracto es demasiado grande (máx. 15 MB)');
     toast('Leyendo ' + esc(f.name) + '…', null, null, 2500);
     try {
       const rows = await readStatement(f);
@@ -778,7 +849,7 @@
       let sample = sampleRow[i]; if (sample instanceof Date) sample = sample.toLocaleDateString('es-ES');
       return '<option value="' + i + '"' + (i === sel ? ' selected' : '') + '>' + esc(label) + (sample !== undefined && sample !== '' ? ' (' + esc(String(sample).slice(0, 18)) + ')' : '') + '</option>';
     }).join('');
-    const catOpts = sel => cats().map(c => '<option value="' + c.id + '"' + (c.id === sel ? ' selected' : '') + '>' + esc(c.emoji + ' ' + c.name) + '</option>').join('');
+    const catOpts = sel => cats().map(c => '<option value="' + esc(c.id) + '"' + (c.id === sel ? ' selected' : '') + '>' + esc(c.emoji + ' ' + c.name) + '</option>').join('');
     const rebuild = () => {
       items = H.parseBankRows(rows, map, { cats: cats(), learned: S.learned, existing: S.expenses });
       items.forEach(it => { it.on = !it.dup && !it.transfer; });
@@ -945,7 +1016,7 @@
     renderAll();
     if (added.length === 1) {
       const it = added[0], c = catById(it.cat);
-      toast('🔔 ' + c.emoji + ' ' + esc(it.desc) + ' · ' + (it.type === 'income' ? '+' : '') + money(it.amount), 'Deshacer', () => { S.expenses = S.expenses.filter(e => e.id !== it.id); save(); renderAll(); }, 6000);
+      toast('🔔 ' + esc(c.emoji) + ' ' + esc(it.desc) + ' · ' + (it.type === 'income' ? '+' : '') + money(it.amount), 'Deshacer', () => { S.expenses = S.expenses.filter(e => e.id !== it.id); save(); renderAll(); }, 6000);
     } else if (added.length > 1) {
       toast('🔔 ' + added.length + ' movimientos del banco apuntados', 'Ver', () => switchTab('movimientos'), 6000);
     } else if (pend) toast('📥 ' + pend + ' del banco por revisar', 'Revisar', inboxSheet, 6000);
@@ -953,19 +1024,19 @@
 
   function inboxSheet() {
     if (!S.inbox.length) { closeSheet(); return; }
-    const catOpts = sel => cats().map(c => '<option value="' + c.id + '"' + (c.id === sel ? ' selected' : '') + '>' + esc(c.emoji + ' ' + c.name) + '</option>').join('') + '<option value="ingreso"' + (sel === 'ingreso' ? ' selected' : '') + '>💶 Es un ingreso</option>';
+    const catOpts = sel => cats().map(c => '<option value="' + esc(c.id) + '"' + (c.id === sel ? ' selected' : '') + '>' + esc(c.emoji + ' ' + c.name) + '</option>').join('') + '<option value="ingreso"' + (sel === 'ingreso' ? ' selected' : '') + '>💶 Es un ingreso</option>';
     openSheet('<h3>📥 Por revisar</h3><p class="muted small" style="margin-top:-6px">Movimientos que he leído de tus notificaciones pero no he entendido del todo. Corrige lo que haga falta y confirma.</p>'
-      + '<div class="imp-list" id="inbList">' + S.inbox.map(it => '<div class="imp-row inbox-row" data-id="' + it.id + '"><div class="mid">'
+      + '<div class="imp-list" id="inbList">' + S.inbox.map(it => '<div class="imp-row inbox-row" data-id="' + esc(it.id) + '"><div class="mid">'
         + '<input class="inb-desc" value="' + esc(it.desc) + '">'
         + '<div class="s">' + esc(it.bank || '') + ' · ' + H.fromISO(it.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }) + '</div>'
         + '<div class="s raw">«' + esc(it.raw || '') + '»</div>'
         + '<select class="inb-cat">' + catOpts(it.type === 'income' ? 'ingreso' : it.cat) + '</select></div>'
         + '<div class="inb-side"><div class="amt' + (it.type === 'income' ? ' inc' : '') + '">' + (it.type === 'income' ? '+' : '−') + money(it.amount) + '</div>'
-        + '<div class="inb-btns"><button class="btn-ghost danger" data-no="' + it.id + '" aria-label="Descartar">✕</button><button class="btn-add" data-ok="' + it.id + '" aria-label="Confirmar">✓</button></div></div></div>').join('') + '</div>'
+        + '<div class="inb-btns"><button class="btn-ghost danger" data-no="' + esc(it.id) + '" aria-label="Descartar">✕</button><button class="btn-add" data-ok="' + esc(it.id) + '" aria-label="Confirmar">✓</button></div></div></div>').join('') + '</div>'
       + '<div class="actions imp-actions"><button class="btn-ghost" id="inbNone">Descartar todos</button><button class="btn-primary" id="inbAll">Confirmar todos</button></div>', sh => {
       const accept = row => {
         const it = S.inbox.find(x => x.id === row.dataset.id); if (!it) return;
-        const cat = $('.inb-cat', row).value, desc = $('.inb-desc', row).value.trim() || it.desc;
+        const v = $('.inb-cat', row).value, cat = (v === 'ingreso' || cats().some(c => c.id === v)) ? v : 'otros', desc = safeText($('.inb-desc', row).value, 80) || it.desc;
         const e = Object.assign({}, it, { desc, type: cat === 'ingreso' ? 'income' : 'expense', cat });
         delete e.confidence; S.expenses.push(e);
         if (e.type !== 'income') S.learned[H.normalize(desc)] = cat;

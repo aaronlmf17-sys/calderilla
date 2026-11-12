@@ -1,0 +1,56 @@
+diff --git a/node_modules/capacitor-notifications-listener/android/src/main/java/com/capacitor/notifications/listener/NotificationService.java b/node_modules/capacitor-notifications-listener/android/src/main/java/com/capacitor/notifications/listener/NotificationService.java
+index 9e1091f..4a4d550 100644
+--- a/node_modules/capacitor-notifications-listener/android/src/main/java/com/capacitor/notifications/listener/NotificationService.java
++++ b/node_modules/capacitor-notifications-listener/android/src/main/java/com/capacitor/notifications/listener/NotificationService.java
+@@ -88,7 +88,6 @@ public class NotificationService extends NotificationListenerService {
+             return;
+         }
+         Log.d(TAG, "Service ID" + this.uuid + " Whitelist size: " + (packagesWhitelist != null ? packagesWhitelist.size() : "disabled") + " Receiver: " + notificationReceiver + " WebViewActive: " + webViewActive);
+-        Log.d(TAG, "Received notification: " + sbn.getNotification().extras.getCharSequence("android.text"));
+         if (packagesWhitelist != null && !existsInWhitelist(sbn)) return;
+         if (isDuplicateOfLast(sbn) || isDuplicateInCache(sbn)) {
+             Log.d(TAG, "Notification already received - skipping");
+@@ -133,6 +132,8 @@ public class NotificationService extends NotificationListenerService {
+ 
+     private Intent notificationToIntent(StatusBarNotification sbn, String action) {
+         Intent i = new Intent(action);
++        // SEGURIDAD (Calderilla): entrega solo a nuestra propia app, nunca un broadcast implícito
++        i.setPackage(getPackageName());
+         Notification n = sbn.getNotification();
+ 
+         CharSequence pkg = sbn.getPackageName();
+diff --git a/node_modules/capacitor-notifications-listener/android/src/main/java/com/capacitor/notifications/listener/NotificationsListenerPlugin.java b/node_modules/capacitor-notifications-listener/android/src/main/java/com/capacitor/notifications/listener/NotificationsListenerPlugin.java
+index e943041..17bf361 100644
+--- a/node_modules/capacitor-notifications-listener/android/src/main/java/com/capacitor/notifications/listener/NotificationsListenerPlugin.java
++++ b/node_modules/capacitor-notifications-listener/android/src/main/java/com/capacitor/notifications/listener/NotificationsListenerPlugin.java
+@@ -15,6 +15,7 @@ import android.text.TextUtils;
+ import android.util.Log;
+ 
+ import androidx.annotation.NonNull;
++import androidx.core.content.ContextCompat;
+ 
+ import com.getcapacitor.JSObject;
+ import com.getcapacitor.Plugin;
+@@ -161,7 +162,6 @@ public class NotificationsListenerPlugin extends Plugin {
+         try {
+             for (int i = 0; i < persistedJSONArray.length(); i++) {
+                 JSONObject jo = persistedJSONArray.getJSONObject(i);
+-                Log.d(TAG, "Restoring cached notification: " + jo.toString());
+                 notifyListeners(EVENT_NOTIFICATION_RECEIVED, new JSObject(jo.toString()));
+             }
+         } catch (Exception e) {
+@@ -290,11 +290,9 @@ public class NotificationsListenerPlugin extends Plugin {
+         @SuppressLint("UnspecifiedRegisterReceiverFlag")
+         private NotificationReceiver(Context context, IntentFilter filter) {
+             Log.d(TAG, "NotificationReceiver created");
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+-                context.registerReceiver(this, filter);
+-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+-                context.registerReceiver(this, filter, Context.RECEIVER_EXPORTED);
+-            }
++            // SEGURIDAD (Calderilla): receptor no exportado en todas las versiones de Android.
++            // En Android < 13, ContextCompat lo protege con un permiso de firma propio de la app.
++            ContextCompat.registerReceiver(context, this, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
+         }
+ 
+         @Override

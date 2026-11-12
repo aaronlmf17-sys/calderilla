@@ -2,8 +2,16 @@
   "appId": "es.calderilla.app",
   "appName": "Calderilla",
   "webDir": "www",
-  "android": { "backgroundColor": "#f4f2ec" },
+  "android": {
+    "backgroundColor": "#f4f2ec",
+    "webContentsDebuggingEnabled": false,
+    "allowMixedContent": false,
+    "captureInput": false
+  },
   "plugins": {
-    "LocalNotifications": { "smallIcon": "ic_stat_calderilla", "iconColor": "#1f7a5a" }
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_calderilla",
+      "iconColor": "#1f7a5a"
+    }
   }
 }

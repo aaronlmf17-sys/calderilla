@@ -87,7 +87,7 @@
   /* Interpreta texto libre: "café 1,80", "mercadona 45 ayer", "+1500 nómina", "gasolina 60€ el lunes" */
   function parseQuick(text, learned, now, cats) {
     now = now || new Date();
-    let t = ' ' + String(text || '').trim() + ' ';
+    let t = ' ' + String(text || '').slice(0, 300).trim() + ' ';
     const res = { amount: null, desc: '', date: toISO(now), type: 'expense', cat: null };
     if (/^\s*\+/.test(t)) { res.type = 'income'; t = t.replace(/^\s*\+/, ' '); }
 
@@ -275,7 +275,8 @@
 
   /* Interpreta el texto OCR de un ticket */
   function parseReceipt(text) {
-    const lines = String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    text = String(text || '').slice(0, 20000);
+    const lines = text.split(/\r?\n/).map(l => l.trim().slice(0, 200)).filter(Boolean).slice(0, 400);
     const amtRe = /(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})(?!\d)/g;
     const amountsIn = l => (l.match(amtRe) || []).map(parseAmountStr).filter(v => v != null && v > 0);
     let total = null;
@@ -506,8 +507,8 @@
     let lines = n.textlines;
     if (typeof lines === 'string') { try { lines = JSON.parse(lines); } catch (e) { lines = [lines]; } }
     const parts = [];
-    for (const p of [n.apptitle, n.title, n.text].concat(Array.isArray(lines) ? lines : [])) {
-      const t = String(p || '').trim();
+    for (const p of [n.apptitle, n.title, n.text].concat(Array.isArray(lines) ? lines.slice(0, 10) : [])) {
+      const t = String(p || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 300);
       if (t && !parts.some(x => x.includes(t))) { for (let i = parts.length - 1; i >= 0; i--) if (t.includes(parts[i])) parts.splice(i, 1); parts.push(t); }
     }
     const full = parts.join(' · ');

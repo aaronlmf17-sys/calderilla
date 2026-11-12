@@ -1,6 +1,6 @@
 /* Calderilla service worker: modo sin conexión + avisos en Android sin servidor.
    Sube VERSION cada vez que publiques cambios. */
-const VERSION = 'calderilla-v3';
+const VERSION = 'calderilla-v4';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'parser.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'badge.png', 'vendor/capacitor.js'];
 const KEEP = [VERSION, 'calderilla-ocr', 'calderilla-sw'];
 
@@ -14,7 +14,8 @@ self.addEventListener('fetch', e => {
   if (url.origin === location.origin) {
     e.respondWith(fetch(e.request).then(r => { const copy = r.clone(); caches.open(VERSION).then(c => c.put(e.request, copy)); return r; })
       .catch(() => caches.match(e.request, { ignoreSearch: true }).then(r => r || caches.match('index.html'))));
-  } else if (/tesseract|tessdata|xlsx/.test(url.href)) {
+  } else if (url.origin === 'https://cdn.jsdelivr.net' && url.pathname.startsWith('/npm/@tesseract.js-data/spa/4.0.0_best_int/')) {
+    // diccionario del OCR (datos, versión fija): se descarga una vez y queda guardado
     e.respondWith(caches.open('calderilla-ocr').then(c => c.match(e.request).then(hit => hit || fetch(e.request).then(r => { if (r.ok) c.put(e.request, r.clone()); return r; }))));
   }
 });

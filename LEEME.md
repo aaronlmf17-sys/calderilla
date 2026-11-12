@@ -78,6 +78,9 @@ En la web, *Ajustes → Exportar* descarga un `.json`. En la app, *Ajustes → I
 | `www/app.js` | Interfaz, metas, importador, integración con Android |
 | `android.zip` | Proyecto nativo de Capacitor 8 (permiso de notificaciones, firma, iconos). GitHub Actions lo descomprime al compilar; para tocarlo en local, descomprímelo, cámbialo y vuelve a comprimirlo |
 | `tests/run.js` | Pruebas que se ejecutan antes de compilar. Si fallan, no se publica nada |
+| `patches/` | Parche de seguridad del plugin de notificaciones (se aplica solo con `patch-package`) |
+| `www/vendor/` | Librerías incluidas en la app (sin CDN), con sus huellas SHA-256 |
+| `SEGURIDAD.md` | Auditoría de seguridad y correcciones |
 | `.github/workflows/build.yml` | Compilación del APK y publicación de la web |
 
-Para probar en local: `npm install && npm test`. Para abrirlo en Android Studio: `unzip android.zip && npx cap sync android && npx cap open android`.
+Para probar en local: `npm ci --ignore-scripts && npx patch-package && npm test`. Para abrirlo en Android Studio: `unzip android.zip && npx cap sync android && npx cap open android`.
