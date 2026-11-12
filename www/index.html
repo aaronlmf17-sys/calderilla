@@ -72,10 +72,14 @@
   <section class="view" id="view-analisis" hidden>
     <div class="month-switch"><button class="round" data-month="-1" aria-label="Mes anterior">‹</button><span class="month-label"></span><button class="round" data-month="1" aria-label="Mes siguiente">›</button></div>
     <div class="card" id="summaryCard"></div>
-    <div class="section-title">Por categoría <span class="hint">toca para fijar un límite</span></div>
+    <div class="section-title">¿A dónde va lo que ingresas?</div>
+    <div class="card" id="allocCard"></div>
+    <div class="section-title">Balance mensual</div>
+    <div class="card" id="balanceCard"></div>
+    <div class="section-title">Ritmo del mes</div>
+    <div class="card" id="paceCard"></div>
+    <div class="section-title">Por categoría <span class="hint">toca para ver el detalle</span></div>
     <div class="card" id="catBars"></div>
-    <div class="section-title">Día a día</div>
-    <div class="card" id="dailyChart"></div>
     <div class="section-title">Suscripciones y pagos fijos</div>
     <div class="card" id="subsList"></div>
     <div class="section-title">¿Dónde puedes ahorrar? <span class="hint">últimos 60 días</span></div>
@@ -98,6 +102,7 @@
     </div>
     <div class="card settings">
       <div class="set-row"><div><b>Presupuesto mensual</b><div class="muted">Te aviso al 80 % y al 100 %</div></div><button class="btn-ghost" id="setMonthly"></button></div>
+      <div class="set-row"><div><b>Día de cobro</b><div class="muted">Tus meses van de nómina a nómina</div></div><button class="btn-ghost" id="paydayBtn">Mes natural</button></div>
       <div class="set-row"><div><b>Categorías</b><div class="muted" id="catsCount"></div></div><button class="btn-ghost" id="catsBtn">Editar</button></div>
       <div class="set-row"><div><b>Importar extracto del banco</b><div class="muted">CSV o Excel descargado de tu banco</div></div><label class="btn-ghost">Elegir<input type="file" id="bankInput" accept=".csv,.xls,.xlsx,.txt,.ods,text/csv" hidden></label></div>
       <div class="set-row"><div><b>Copia de seguridad</b><div class="muted">Tus datos solo viven en este móvil</div></div><div class="btns"><button class="btn-ghost" id="exportBtn">Exportar</button><label class="btn-ghost">Importar<input type="file" id="importInput" accept="application/json,.json" hidden></label></div></div>

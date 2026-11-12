@@ -211,3 +211,45 @@ code { background: var(--bg); padding: 1px 6px; border-radius: 6px; font-size: 1
 ol.steps { padding-left: 20px; line-height: 1.5; font-size: 15px; }
 ol.steps li { margin-bottom: 8px; }
 html.native body { padding-top: max(env(safe-area-inset-top), 8px); }
+
+/* v4: gráficos */
+.alloc-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; font-size: 15px; }
+.stack { display: flex; height: 22px; border-radius: 8px; overflow: hidden; background: var(--line); }
+.stack i { display: block; height: 100%; min-width: 2px; border-right: 2px solid var(--card); }
+.stack i:last-child { border-right: 0; }
+.stack .seg-save { background: repeating-linear-gradient(45deg, var(--income), var(--income) 6px, color-mix(in srgb, var(--income) 70%, transparent) 6px, color-mix(in srgb, var(--income) 70%, transparent) 12px); }
+.legend { margin-top: 10px; display: grid; gap: 6px; }
+.leg { display: grid; grid-template-columns: 12px 1fr auto 64px; align-items: center; gap: 8px; font-size: 14px; }
+.leg .dot { width: 10px; height: 10px; border-radius: 3px; }
+.leg-n { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.leg .muted { text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; }
+.leg b { font-variant-numeric: tabular-nums; }
+.rule { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.rule-title { font-weight: 700; margin-bottom: 8px; }
+.rule-row { margin-bottom: 10px; }
+.rule-top { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; margin-bottom: 4px; }
+.rule-bar { position: relative; overflow: visible; }
+.rule-bar s { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); opacity: .6; border-radius: 2px; }
+.verdict { padding: 10px 12px; border-radius: 12px; background: var(--accent-soft); font-size: 14px; margin: 6px 0 8px; }
+svg.chart { width: 100%; height: auto; display: block; margin: 4px 0 6px; overflow: visible; }
+svg.chart .axis { stroke: var(--line); stroke-width: 1; }
+svg.chart .b-inc { fill: var(--income); }
+svg.chart .b-exp { fill: #e8590c; }
+svg.chart .sel-bg { fill: var(--accent-soft); }
+svg.chart .hit { fill: transparent; cursor: pointer; }
+svg.chart text { font-size: 9px; fill: var(--muted); font-family: var(--font); }
+svg.chart text.sel { fill: var(--ink); font-weight: 700; }
+svg.chart text.rate { font-size: 8.5px; font-weight: 700; fill: var(--muted); }
+svg.chart text.rate.good { fill: var(--income); }
+svg.chart text.rate.neg { fill: var(--danger); }
+svg.chart .l-cur { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+svg.chart .l-prev { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 4 3; opacity: .7; }
+svg.chart .budget { stroke: var(--warn); stroke-width: 1.2; stroke-dasharray: 5 4; }
+svg.chart .ideal { stroke: var(--warn); stroke-width: 1; opacity: .35; }
+svg.chart .pt { fill: var(--accent); stroke: var(--card); stroke-width: 2; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; align-items: center; }
+.chart-legend .sw { display: inline-block; width: 12px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+.chart-legend .sw.b-inc { background: var(--income); } .chart-legend .sw.b-exp { background: #e8590c; }
+.chart-legend .sw.l-cur { background: var(--accent); height: 3px; } .chart-legend .sw.l-prev { border-top: 2px dashed var(--muted); height: 0; }
+.chart-legend .sw.budget { border-top: 2px dashed var(--warn); height: 0; }
+.sheet-list { max-height: 34vh; overflow: auto; margin: 0 -6px; }

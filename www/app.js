@@ -18,7 +18,12 @@
   const fmt0 = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
   const money = c => fmt.format((c || 0) / 100);
   const money0 = c => fmt0.format(Math.round((c || 0) / 100));
-  const monthName = (y, m) => { const t = new Date(y, m, 1).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }); return t.charAt(0).toUpperCase() + t.slice(1); };
+  const monthName = (y, m) => {
+    const t = new Date(y, m, 1).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+    let label = t.charAt(0).toUpperCase() + t.slice(1);
+    if ((S.settings.payday || 1) > 1) { const r = periodRange(y, m), f = d => d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }); label += ' · ' + f(r.start) + ' – ' + f(r.end); }
+    return label;
+  };
   const todayISO = () => H.toISO(new Date());
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
@@ -86,6 +91,7 @@
     // ajustes
     const st = isObj(d.settings) ? d.settings : {};
     o.settings.monthlyBudget = posCents(st.monthlyBudget);
+    o.settings.payday = Number.isInteger(st.payday) && st.payday >= 1 && st.payday <= 28 ? st.payday : 1;
     const nf = isObj(d.notif) ? d.notif : {};
     o.notif = { daily: nf.daily !== false, hour: Number.isInteger(nf.hour) && nf.hour >= 0 && nf.hour <= 23 ? nf.hour : 21, subs: nf.subs !== false };
     const bk = isObj(d.bank) ? d.bank : {};
@@ -115,13 +121,35 @@
 
   /* ---------- Estado de UI ---------- */
   const now0 = new Date();
-  let viewMonth = { y: now0.getFullYear(), m: now0.getMonth() };
+  let viewMonth; // se fija justo después de definir los periodos
   let currentTab = 'inicio';
   let draft = null;       // resultado de parseQuick
   let draftCatManual = null;
 
   const monthKey = (y, m) => y + '-' + String(m + 1).padStart(2, '0');
-  const inMonth = (e, y, m) => e.date.startsWith(monthKey(y, m));
+  /* Un "mes" de la app va de nómina a nómina. Con día de cobro 28, «noviembre» = 28 oct – 27 nov.
+     Con día 1 (por defecto) es el mes natural. */
+  const payday = () => S.settings.payday || 1;
+  const periodCache = new Map();
+  function periodRange(y, m) {
+    const key = y + '-' + m + '-' + payday();
+    if (periodCache.has(key)) return periodCache.get(key);
+    const d = payday();
+    const start = d > 1 ? new Date(y, m - 1, d) : new Date(y, m, 1);
+    const next = d > 1 ? new Date(y, m, d) : new Date(y, m + 1, 1);
+    const end = new Date(next); end.setDate(end.getDate() - 1);
+    const r = { start, end, startISO: H.toISO(start), endISO: H.toISO(end), days: Math.round((next - start) / 86400000) };
+    periodCache.set(key, r); return r;
+  }
+  function periodOf(iso) {
+    const dt = H.fromISO(iso), d = payday();
+    let y = dt.getFullYear(), m = dt.getMonth();
+    if (d > 1 && dt.getDate() >= d) { m++; if (m > 11) { m = 0; y++; } }
+    return { y, m };
+  }
+  const shiftPeriod = (y, m, k) => { const t = new Date(y, m + k, 1); return { y: t.getFullYear(), m: t.getMonth() }; };
+  const inMonth = (e, y, m) => { const r = periodRange(y, m); return e.date >= r.startISO && e.date <= r.endISO; };
+  viewMonth = periodOf(todayISO());
   const spentIn = (y, m, cat) => S.expenses.filter(e => e.type !== 'income' && inMonth(e, y, m) && (!cat || e.cat === cat)).reduce((s, e) => s + e.amount, 0);
   const incomeIn = (y, m) => S.expenses.filter(e => e.type === 'income' && inMonth(e, y, m)).reduce((s, e) => s + e.amount, 0);
 
@@ -163,7 +191,7 @@
 
   function checkBudgetCross(item) {
     if (item.type === 'income') return;
-    const d = H.fromISO(item.date), y = d.getFullYear(), m = d.getMonth();
+    const { y, m } = periodOf(item.date);
     const check = (limit, after, label) => {
       if (!limit) return;
       const before = after - item.amount;
@@ -302,11 +330,11 @@
   const sortDesc = (a, b) => b.date.localeCompare(a.date) || (b.ts || 0) - (a.ts || 0);
 
   function renderInicio() {
-    const n = new Date(), y = n.getFullYear(), m = n.getMonth();
+    const n = new Date(), { y, m } = periodOf(todayISO());
     const spent = spentIn(y, m), inc = incomeIn(y, m);
     const today = S.expenses.filter(e => e.type !== 'income' && e.date === todayISO()).reduce((s, e) => s + e.amount, 0);
     $('#heroAmount').textContent = money(spent);
-    const daysLeft = new Date(y, m + 1, 0).getDate() - n.getDate() + 1;
+    const daysLeft = H.daysBetween(todayISO(), periodRange(y, m).endISO) + 1;
     const mb = S.settings.monthlyBudget;
     let meta = 'Hoy ' + money(today);
     if (inc) meta += ' · Ingresos ' + money0(inc) + ' · Ahorro ' + money0(inc - spent);
@@ -415,14 +443,16 @@
     $$('.month-label').forEach(l => l.textContent = monthName(viewMonth.y, viewMonth.m));
     const { y, m } = viewMonth;
     const spent = spentIn(y, m), inc = incomeIn(y, m);
-    const py = m === 0 ? y - 1 : y, pm = m === 0 ? 11 : m - 1;
+    const { y: py, m: pm } = shiftPeriod(y, m, -1);
     const prev = spentIn(py, pm);
-    const isCurrent = y === now0.getFullYear() && m === now0.getMonth();
+    const cur = periodOf(todayISO());
+    const isCurrent = y === cur.y && m === cur.m;
+    const range = periodRange(y, m), prange = periodRange(py, pm);
+    const dayN = isCurrent ? H.daysBetween(range.startISO, todayISO()) : range.days - 1;
     let delta = '';
     if (prev) {
       // comparar a misma altura de mes si es el mes en curso
-      const dayN = new Date().getDate();
-      const prevSame = isCurrent ? S.expenses.filter(e => e.type !== 'income' && inMonth(e, py, pm) && Number(e.date.slice(8)) <= dayN).reduce((s, e) => s + e.amount, 0) : prev;
+      const prevSame = isCurrent ? S.expenses.filter(e => e.type !== 'income' && inMonth(e, py, pm) && H.daysBetween(prange.startISO, e.date) <= dayN).reduce((s, e) => s + e.amount, 0) : prev;
       if (prevSame) {
         const p = Math.round((spent - prevSame) / prevSame * 100);
         delta = '<div class="delta ' + (p > 0 ? 'up' : 'down') + '">' + (p > 0 ? '▲ ' : '▼ ') + Math.abs(p) + ' % vs ' + (isCurrent ? 'mismo día del mes pasado' : 'mes anterior') + '</div>';
@@ -443,18 +473,12 @@
     }).join('') + '<button class="link" id="addLimit" style="margin-top:8px">+ Poner límite a otra categoría</button>' : '<div class="empty">Sin gastos este mes.</div>';
     $('#catBars').onclick = ev => {
       if (ev.target.id === 'addLimit') return pickCatForLimit();
-      const b = ev.target.closest('.bar-row'); if (b) limitSheet(b.dataset.cat);
+      const b = ev.target.closest('.bar-row'); if (b) categoryDetailSheet(b.dataset.cat);
     };
 
-    // día a día
-    const dim = new Date(y, m + 1, 0).getDate();
-    const daily = Array.from({ length: dim }, (_, i) => S.expenses.filter(e => e.type !== 'income' && e.date === monthKey(y, m) + '-' + String(i + 1).padStart(2, '0')).reduce((s, e) => s + e.amount, 0));
-    const dmax = Math.max(1, ...daily), W = 310, Hh = 100, bw = W / dim;
-    const todayIdx = isCurrent ? new Date().getDate() - 1 : -1;
-    $('#dailyChart').innerHTML = '<svg class="daily" viewBox="0 0 ' + W + ' 120" preserveAspectRatio="none">'
-      + daily.map((v, i) => '<rect class="' + (i === todayIdx ? 'today' : '') + '" x="' + (i * bw + 1) + '" y="' + (Hh - v / dmax * Hh) + '" width="' + Math.max(1, bw - 2) + '" height="' + Math.max(v ? 2 : 0, v / dmax * Hh) + '" rx="2"><title>' + (i + 1) + ': ' + money(v) + '</title></rect>').join('')
-      + [1, 10, 20, dim].map(d => '<text x="' + ((d - 0.5) * bw) + '" y="115" text-anchor="middle">' + d + '</text>').join('') + '</svg>'
-      + '<div class="muted small">Media diaria: ' + money(spent / (isCurrent ? new Date().getDate() : dim)) + ' · Día más caro: ' + money(dmax === 1 ? 0 : dmax) + '</div>';
+    renderAllocation(y, m, spent, inc);
+    renderBalance(y, m);
+    renderPace(y, m, range, prange, isCurrent, dayN, spent);
 
     // suscripciones y fijos
     const rec = H.detectRecurring(S.expenses, new Date());
@@ -479,6 +503,165 @@
         + (g ? ' <button class="link" data-goto="metas">Llévalo a «' + esc(g.name) + '» →</button>' : '') + '</div>');
     }
   }
+  /* ---------- Gráficos (SVG propio, sin librerías) ---------- */
+  const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
+  const MONTH_INI = ['E', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+  const monthShort = (y, m) => new Date(y, m, 1).toLocaleDateString('es-ES', { month: 'short' }).replace('.', '');
+
+  // ¿A dónde va tu sueldo? + regla 50/30/20
+  function renderAllocation(y, m, spent, inc) {
+    const box = $('#allocCard');
+    if (!inc) {
+      box.innerHTML = '<div class="empty">Apunta lo que cobras (por ejemplo <code>+1850 nómina</code>) o importa el extracto del banco, y verás qué parte de tu sueldo se va en cada cosa y cuánto ahorras.</div>';
+      return;
+    }
+    const byCat = cats().map(c => ({ c, s: spentIn(y, m, c.id) })).filter(x => x.s > 0).sort((a, b) => b.s - a.s);
+    const saving = inc - spent, base = Math.max(inc, spent);
+    // barra apilada: cada categoría en proporción a lo ingresado; el hueco verde es el ahorro
+    const segs = byCat.map(({ c, s }) => '<i style="width:' + (s / base * 100) + '%;background:' + safeColor(c.color) + '" title="' + esc(c.name) + '"></i>').join('')
+      + (saving > 0 ? '<i class="seg-save" style="width:' + (saving / base * 100) + '%"></i>' : '');
+    const legend = byCat.map(({ c, s }) => '<div class="leg"><span class="dot" style="background:' + safeColor(c.color) + '"></span><span class="leg-n">' + esc(c.emoji + ' ' + c.name) + '</span><b>' + pct(s, inc) + ' %</b><span class="muted">' + money0(s) + '</span></div>').join('')
+      + '<div class="leg"><span class="dot" style="background:var(--income)"></span><span class="leg-n">💰 Ahorro</span><b class="' + (saving < 0 ? 'over-txt' : 'ok-txt') + '">' + pct(saving, inc) + ' %</b><span class="muted">' + money0(saving) + '</span></div>';
+
+    // 50/30/20: necesidades = categorías básicas; caprichos = el resto
+    const ess = new Set(essentialIds());
+    const needs = byCat.filter(x => ess.has(x.c.id)).reduce((t, x) => t + x.s, 0);
+    const wants = spent - needs;
+    const rule = [
+      { k: 'Necesidades', sub: 'casa, súper, facturas…', v: pct(needs, inc), goal: 50, ok: v => v <= 50 },
+      { k: 'Caprichos', sub: 'ocio, comer fuera, compras…', v: pct(wants, inc), goal: 30, ok: v => v <= 30 },
+      { k: 'Ahorro', sub: 'lo que no gastas', v: pct(saving, inc), goal: 20, ok: v => v >= 20 },
+    ];
+    const rows = rule.map(r => '<div class="rule-row"><div class="rule-top"><span><b>' + r.k + '</b> <span class="muted small">' + r.sub + '</span></span><b class="' + (r.ok(r.v) ? 'ok-txt' : 'warn-txt') + '">' + r.v + ' %</b></div>'
+      + '<div class="bar rule-bar"><i style="width:' + Math.max(0, Math.min(100, r.v)) + '%;background:' + (r.ok(r.v) ? 'var(--income)' : 'var(--warn)') + '"></i><s style="left:' + r.goal + '%"></s></div>'
+      + '<div class="muted small">Objetivo: ' + (r.k === 'Ahorro' ? 'al menos ' : 'como mucho ') + r.goal + ' %</div></div>').join('');
+    const savePct = pct(saving, inc);
+    let verdict;
+    if (saving < 0) verdict = '🚨 Este mes has gastado <b>' + money0(-saving) + ' más</b> de lo que has ingresado.';
+    else if (savePct >= 20 && rule[0].ok(rule[0].v) && rule[1].ok(rule[1].v)) verdict = '🎉 Cumples la regla 50/30/20 este mes. ¡Bien hecho!';
+    else if (savePct >= 20) verdict = '👍 Ahorras un ' + savePct + ' %, por encima del 20 % recomendado.';
+    else verdict = 'Ahorras un ' + savePct + ' %. Para llegar al 20 % te faltan <b>' + money0(inc * 0.2 - saving) + '</b>' + (wants > inc * 0.3 ? ', y los caprichos son lo más fácil de recortar.' : '.');
+    box.innerHTML = '<div class="alloc-head"><span>Has ingresado <b>' + money0(inc) + '</b></span><span class="muted small">' + pct(spent, inc) + ' % gastado</span></div>'
+      + '<div class="stack">' + segs + '</div>' + (spent > inc ? '<div class="muted small over-txt" style="margin-top:4px">La barra pasa de lo ingresado: te has pasado ' + money0(spent - inc) + '</div>' : '')
+      + '<div class="legend">' + legend + '</div>'
+      + '<div class="rule"><div class="rule-title">Regla 50 / 30 / 20</div>' + rows + '<div class="verdict">' + verdict + '</div>'
+      + '<div class="muted small">Cuentan como necesidades las categorías marcadas como «gasto básico». Puedes cambiarlas en Ajustes → Categorías.</div></div>';
+  }
+
+  // Balance de los últimos 12 meses
+  function renderBalance(y, m) {
+    const box = $('#balanceCard');
+    const months = Array.from({ length: 12 }, (_, i) => shiftPeriod(y, m, i - 11)).map(p => ({ ...p, inc: incomeIn(p.y, p.m), exp: spentIn(p.y, p.m) }));
+    const firstData = months.findIndex(p => p.inc || p.exp);
+    if (firstData < 0) { box.innerHTML = '<div class="empty">Aquí verás mes a mes lo que entra, lo que sale y lo que ahorras.</div>'; return; }
+    const shown = months.slice(Math.min(firstData, 6)); // al menos 6 meses en pantalla
+    const W = 320, Hh = 130, top = 16, n = shown.length, gw = W / n, bw = Math.min(11, gw / 2 - 2);
+    const max = Math.max(1, ...shown.map(p => Math.max(p.inc, p.exp)));
+    const yv = v => top + (Hh - top) * (1 - v / max);
+    let svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + (Hh + 20) + '" role="img" aria-label="Ingresos y gastos por mes">';
+    svg += '<line class="axis" x1="0" x2="' + W + '" y1="' + Hh + '" y2="' + Hh + '"/>';
+    shown.forEach((p, i) => {
+      const cx = gw * i + gw / 2, sel = p.y === y && p.m === m;
+      if (sel) svg += '<rect class="sel-bg" x="' + (gw * i + 1) + '" y="0" width="' + (gw - 2) + '" height="' + (Hh + 18) + '" rx="6"/>';
+      svg += '<rect class="b-inc" x="' + (cx - bw - 1) + '" y="' + yv(p.inc) + '" width="' + bw + '" height="' + (Hh - yv(p.inc)) + '" rx="2"/>';
+      svg += '<rect class="b-exp" x="' + (cx + 1) + '" y="' + yv(p.exp) + '" width="' + bw + '" height="' + (Hh - yv(p.exp)) + '" rx="2"/>';
+      if (p.inc) { const r = pct(p.inc - p.exp, p.inc); svg += '<text class="rate ' + (r < 0 ? 'neg' : r >= 20 ? 'good' : '') + '" x="' + cx + '" y="' + Math.max(10, Math.min(yv(p.inc), yv(p.exp)) - 4) + '" text-anchor="middle">' + r + '%</text>'; }
+      svg += '<text class="lbl' + (sel ? ' sel' : '') + '" x="' + cx + '" y="' + (Hh + 14) + '" text-anchor="middle">' + (n > 8 ? MONTH_INI[p.m] : monthShort(p.y, p.m)) + '</text>';
+      svg += '<rect class="hit" data-per="' + p.y + '-' + p.m + '" x="' + (gw * i) + '" y="0" width="' + gw + '" height="' + (Hh + 20) + '"><title>' + esc(monthName(p.y, p.m)) + ': entra ' + money0(p.inc) + ', sale ' + money0(p.exp) + '</title></rect>';
+    });
+    svg += '</svg>';
+    const tInc = shown.reduce((t, p) => t + p.inc, 0), tExp = shown.reduce((t, p) => t + p.exp, 0);
+    box.innerHTML = '<div class="chart-legend"><span><i class="sw b-inc"></i>Ingresos</span><span><i class="sw b-exp"></i>Gastos</span><span class="muted small">% = lo que ahorras</span></div>' + svg
+      + '<div class="muted small">En ' + n + ' meses: entran ' + money0(tInc) + ', salen ' + money0(tExp) + ' · ' + (tInc ? 'ahorras el <b>' + pct(tInc - tExp, tInc) + ' %</b> (' + money0(tInc - tExp) + ')' : 'apunta tus ingresos para ver el ahorro') + '. Toca un mes para verlo.</div>';
+    box.querySelector('svg').onclick = ev => {
+      const h = ev.target.closest('[data-per]'); if (!h) return;
+      const [py, pm] = h.dataset.per.split('-').map(Number); viewMonth = { y: py, m: pm }; renderAll(); window.scrollTo(0, 0);
+    };
+  }
+
+  // Ritmo del mes: gasto acumulado vs mes anterior y presupuesto
+  function renderPace(y, m, range, prange, isCurrent, dayN, spent) {
+    const box = $('#paceCard');
+    const cum = (r, until) => { const arr = new Array(r.days).fill(0); S.expenses.forEach(e => { if (e.type === 'income' || e.date < r.startISO || e.date > r.endISO) return; const i = H.daysBetween(r.startISO, e.date); if (i >= 0 && i < r.days) arr[i] += e.amount; }); let t = 0; return arr.map((v, i) => (t += v, i <= until ? t : null)); };
+    const curr = cum(range, dayN), prev = cum(prange, prange.days);
+    const budget = S.settings.monthlyBudget || 0;
+    const days = range.days, W = 320, Hh = 130, top = 8;
+    const max = Math.max(1, ...curr.filter(v => v != null), ...prev, budget);
+    const xv = i => (i / (days - 1)) * (W - 6) + 3, yv = v => top + (Hh - top) * (1 - v / max);
+    const path = arr => arr.map((v, i) => v == null ? '' : (i && arr[i - 1] != null ? 'L' : 'M') + xv(Math.min(i, days - 1)).toFixed(1) + ' ' + yv(v).toFixed(1)).join(' ');
+    let svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + (Hh + 18) + '" role="img" aria-label="Ritmo de gasto del mes">';
+    svg += '<line class="axis" x1="0" x2="' + W + '" y1="' + Hh + '" y2="' + Hh + '"/>';
+    if (budget) svg += '<line class="budget" x1="0" x2="' + W + '" y1="' + yv(budget) + '" y2="' + yv(budget) + '"/><line class="ideal" x1="' + xv(0) + '" y1="' + yv(0) + '" x2="' + xv(days - 1) + '" y2="' + yv(budget) + '"/>';
+    svg += '<path class="l-prev" d="' + path(prev.slice(0, days)) + '"/><path class="l-cur" d="' + path(curr) + '"/>';
+    if (isCurrent && curr[dayN] != null) svg += '<circle class="pt" cx="' + xv(dayN) + '" cy="' + yv(curr[dayN]) + '" r="4"/>';
+    const lbl = i => { const d = new Date(range.start); d.setDate(d.getDate() + i); return d.getDate(); };
+    [0, Math.round((days - 1) / 2), days - 1].forEach(i => { svg += '<text class="lbl" x="' + Math.max(8, Math.min(W - 8, xv(i))) + '" y="' + (Hh + 14) + '" text-anchor="middle">' + lbl(i) + '</text>'; });
+    svg += '</svg>';
+    const prevAtDay = prev[Math.min(dayN, prev.length - 1)] || 0;
+    let txt;
+    if (isCurrent) {
+      // Proyección: los pagos fijos (alquiler, suscripciones) no se reparten por días;
+      // solo el gasto variable se extrapola. Se suman los fijos que aún faltan por cobrar este mes.
+      const rec = H.detectRecurring(S.expenses, new Date()).filter(r => r.active);
+      const recKeys = new Set(rec.map(r => r.key));
+      const fixedSpent = S.expenses.filter(e => e.type !== 'income' && inMonth(e, y, m) && recKeys.has(H.normalize(e.desc))).reduce((t, e) => t + e.amount, 0);
+      const pendingFixed = rec.filter(r => r.next > todayISO() && r.next <= range.endISO).reduce((t, r) => t + r.amount, 0);
+      const variable = spent - fixedSpent;
+      const proj = Math.round(spent + variable / (dayN + 1) * (days - dayN - 1) + pendingFixed);
+      txt = 'Llevas <b>' + money0(spent) + '</b>' + (prevAtDay ? '; el mes pasado a estas alturas llevabas ' + money0(prevAtDay) + ' (' + (spent > prevAtDay ? '<span class="over-txt">+' : '<span class="ok-txt">−') + money0(Math.abs(spent - prevAtDay)) + '</span>)' : '') + '. '
+        + 'A este ritmo acabarás en unos <b>' + money0(proj) + '</b>' + (budget ? (proj > budget ? ', <span class="over-txt">' + money0(proj - budget) + ' por encima</span> de tu presupuesto.' : ', <span class="ok-txt">dentro</span> de tu presupuesto.') : '.');
+    } else txt = 'Gastaste ' + money0(spent) + (prev[prev.length - 1] ? ' frente a ' + money0(prev[prev.length - 1]) + ' el mes anterior' : '') + '.';
+    box.innerHTML = '<div class="chart-legend"><span><i class="sw l-cur"></i>Este mes</span><span><i class="sw l-prev"></i>Mes anterior</span>' + (budget ? '<span><i class="sw budget"></i>Presupuesto</span>' : '') + '</div>' + svg + '<div class="muted small">' + txt + '</div>'
+      + (budget ? '' : '<div class="muted small">Pon un presupuesto mensual en Ajustes para ver si vas por encima del ritmo.</div>');
+  }
+
+  // Detalle de una categoría: evolución de 6 meses y movimientos
+  function categoryDetailSheet(catId) {
+    const c = catById(catId), { y, m } = viewMonth;
+    const ps = Array.from({ length: 6 }, (_, i) => shiftPeriod(y, m, i - 5)).map(p => ({ ...p, v: spentIn(p.y, p.m, catId) }));
+    const max = Math.max(1, ...ps.map(p => p.v)), avg = ps.slice(0, 5).reduce((t, p) => t + p.v, 0) / 5;
+    const W = 300, Hh = 90, gw = W / 6;
+    let svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + (Hh + 18) + '">';
+    ps.forEach((p, i) => {
+      const h = p.v / max * (Hh - 14), x = gw * i + gw * 0.2;
+      svg += '<rect x="' + x + '" y="' + (Hh - h) + '" width="' + gw * 0.6 + '" height="' + Math.max(p.v ? 2 : 0, h) + '" rx="3" style="fill:' + safeColor(c.color) + ';opacity:' + (i === 5 ? 1 : .5) + '"/>';
+      if (p.v) svg += '<text class="rate" x="' + (x + gw * 0.3) + '" y="' + (Hh - h - 3) + '" text-anchor="middle">' + Math.round(p.v / 100) + '</text>';
+      svg += '<text class="lbl" x="' + (x + gw * 0.3) + '" y="' + (Hh + 14) + '" text-anchor="middle">' + monthShort(p.y, p.m) + '</text>';
+    });
+    if (avg) svg += '<line class="budget" x1="0" x2="' + W + '" y1="' + (Hh - avg / max * (Hh - 14)) + '" y2="' + (Hh - avg / max * (Hh - 14)) + '"/>';
+    svg += '</svg>';
+    const items = S.expenses.filter(e => e.cat === catId && inMonth(e, y, m)).sort(sortDesc);
+    const inc = incomeIn(y, m), now = ps[5].v, lim = S.budgets[catId];
+    const diff = avg ? Math.round((now - avg) / avg * 100) : 0;
+    openSheet('<h3>' + esc(c.emoji + ' ' + c.name) + '</h3>'
+      + '<div class="sum-grid" style="margin-bottom:8px"><div><div class="k">Este mes</div><div class="v">' + money0(now) + '</div>' + (avg ? '<div class="delta ' + (diff > 0 ? 'up' : 'down') + '">' + (diff > 0 ? '▲ ' : '▼ ') + Math.abs(diff) + ' % vs tu media</div>' : '') + '</div>'
+      + '<div><div class="k">' + (inc ? 'De lo ingresado' : 'Media (5 meses)') + '</div><div class="v">' + (inc ? pct(now, inc) + ' %' : money0(avg)) + '</div>' + (inc && avg ? '<div class="muted small">media ' + money0(avg) + '/mes</div>' : '') + '</div></div>'
+      + svg + '<div class="muted small" style="margin-bottom:10px">Últimos 6 meses (€). La línea es tu media.</div>'
+      + (items.length ? '<div class="list sheet-list">' + items.slice(0, 50).map(e => rowHTML(e, true)).join('') + '</div>' : '<div class="empty">Sin movimientos este mes.</div>')
+      + '<div class="actions" style="margin-top:12px"><button class="btn-ghost" id="cdClose">Cerrar</button><button class="btn-primary" id="cdLimit">' + (lim ? 'Límite: ' + money0(lim) + ' · cambiar' : 'Poner límite mensual') + '</button></div>', sh => {
+      $('#cdClose', sh).onclick = closeSheet;
+      $('#cdLimit', sh).onclick = () => limitSheet(catId);
+    });
+  }
+
+  // Día de cobro
+  function paydaySheet() {
+    const cur = payday();
+    openSheet('<h3>¿Qué día cobras la nómina?</h3><p class="muted">Así cada mes de la app va de nómina a nómina y los porcentajes de ahorro salen bien. Por ejemplo, si cobras el 28, «noviembre» será del 28 de octubre al 27 de noviembre.</p>'
+      + '<label class="field"><span>Día del mes (1 = mes natural)</span><input id="pdIn" type="number" inputmode="numeric" min="1" max="28" value="' + cur + '"></label>'
+      + '<p class="muted small">Si cobras el 29, 30 o 31, pon 28.</p>'
+      + '<div class="actions"><button class="btn-ghost" id="pdNo">Cancelar</button><button class="btn-primary" id="pdOk">Guardar</button></div>', sh => {
+      $('#pdNo', sh).onclick = closeSheet;
+      $('#pdOk', sh).onclick = () => {
+        const v = parseInt($('#pdIn', sh).value, 10);
+        if (!(v >= 1 && v <= 28)) return $('#pdIn', sh).focus();
+        S.settings.payday = v; periodCache.clear(); viewMonth = periodOf(todayISO()); save(); closeSheet(); renderAll();
+        toast(v === 1 ? 'Meses naturales' : 'Tus meses empiezan el día ' + v);
+      };
+    });
+  }
+  $('#paydayBtn').onclick = paydaySheet;
+
   function saveItemHTML(key, title, sub) {
     const on = S.decisions[key] === 'cut';
     if (/^(alquiler|hipoteca|comunidad|ibi)\b/.test(key)) return '<div class="save-item"><div class="mid"><div class="d">' + title + '</div><div class="s">' + sub + '</div></div></div>';
@@ -493,7 +676,7 @@
 
   function limitSheet(catId) {
     const c = catById(catId), cur = S.budgets[catId];
-    const avg = (() => { let t = 0; for (let i = 1; i <= 3; i++) { const d = new Date(viewMonth.y, viewMonth.m - i, 1); t += spentIn(d.getFullYear(), d.getMonth(), catId); } return t / 3; })();
+    const avg = (() => { let t = 0; for (let i = 1; i <= 3; i++) { const p = shiftPeriod(viewMonth.y, viewMonth.m, -i); t += spentIn(p.y, p.m, catId); } return t / 3; })();
     openSheet('<h3>' + esc(c.emoji) + ' Límite mensual de ' + esc(c.name.toLowerCase()) + '</h3>'
       + (avg ? '<p class="muted">Los últimos 3 meses has gastado de media ' + money0(avg) + '.</p>' : '')
       + '<label class="field"><span>Límite (€ al mes)</span><input id="limIn" inputmode="decimal" value="' + (cur ? cur / 100 : '') + '" placeholder="' + (avg ? Math.round(avg / 100 * 0.85) : '100') + '"></label>'
@@ -516,6 +699,7 @@
     notifStatus();
     renderBank();
     $('#setMonthly').textContent = S.settings.monthlyBudget ? money0(S.settings.monthlyBudget) : 'Fijar';
+    $('#paydayBtn').textContent = payday() > 1 ? 'Día ' + payday() : 'Mes natural';
     $('#storageInfo').textContent = memoryOnly
       ? '⚠️ Este navegador no permite guardar datos: lo que apuntes se perderá al cerrar. Instala la app desde su enlace.'
       : S.expenses.length + ' movimientos guardados en este dispositivo.';
@@ -1197,8 +1381,7 @@
   document.addEventListener('click', ev => { const g = ev.target.closest('[data-goto]'); if (g) switchTab(g.dataset.goto); });
   $('#fab').onclick = () => { switchTab('inicio'); setTimeout(() => qi.focus(), 60); };
   $$('[data-month]').forEach(b => b.onclick = () => {
-    const d = new Date(viewMonth.y, viewMonth.m + Number(b.dataset.month), 1);
-    viewMonth = { y: d.getFullYear(), m: d.getMonth() }; renderAll();
+    viewMonth = shiftPeriod(viewMonth.y, viewMonth.m, Number(b.dataset.month)); renderAll();
   });
 
   function renderAll() {

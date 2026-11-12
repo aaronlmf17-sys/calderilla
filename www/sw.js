@@ -1,6 +1,6 @@
 /* Calderilla service worker: modo sin conexión + avisos en Android sin servidor.
    Sube VERSION cada vez que publiques cambios. */
-const VERSION = 'calderilla-v4';
+const VERSION = 'calderilla-v5';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'parser.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'badge.png', 'vendor/capacitor.js'];
 const KEEP = [VERSION, 'calderilla-ocr', 'calderilla-sw'];
 
