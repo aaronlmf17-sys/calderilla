@@ -5,10 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Seguridad: por defecto, solo lectura. Cada trabajo pide únicamente lo que necesita.
 permissions:
-  contents: write   # crear la Release con el APK
-  pages: write      # publicar la web
-  id-token: write
+  contents: read
 
 concurrency:
   group: calderilla-${{ github.ref }}
@@ -18,21 +17,28 @@ jobs:
   android:
     name: App Android (APK)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # crear la Release con el APK
     steps:
-      - uses: actions/checkout@v4
+      # Acciones fijadas a un commit concreto (una etiqueta como v4 se puede mover; un commit, no)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: 21
 
-      - name: Instalar dependencias
-        run: npm ci
+      - name: Instalar dependencias (sin ejecutar scripts de terceros)
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install patch-package
 
       - name: Pruebas del lector (notificaciones y extractos)
         run: npm test
@@ -41,7 +47,7 @@ jobs:
         run: unzip -q -o android.zip
 
       - name: Copiar la web a Android
-        run: npx cap sync android
+        run: npx --no-install cap sync android
 
       - name: Preparar la clave de firma
         env:
@@ -50,6 +56,7 @@ jobs:
           if [ -z "$KEYSTORE_BASE64" ]; then
             echo "::error::Falta el secreto KEYSTORE_BASE64. Mira el apartado 2 de LEEME.md"; exit 1
           fi
+          umask 077
           echo "$KEYSTORE_BASE64" | base64 -d > android/app/calderilla.keystore
 
       - name: Compilar APK firmado
@@ -62,28 +69,43 @@ jobs:
           ./gradlew assembleRelease --no-daemon --stacktrace
           cp app/build/outputs/apk/release/app-release.apk ../calderilla.apk
 
+      - name: Borrar la clave de firma del disco
+        if: always()
+        run: rm -f android/app/calderilla.keystore
+
+      - name: Huella SHA-256 del APK
+        run: sha256sum calderilla.apk | tee calderilla.apk.sha256
+
       - name: Publicar Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: v3.${{ github.run_number }}
           name: Calderilla 3.${{ github.run_number }}
           body: |
             Descarga **calderilla.apk** desde el móvil Android e instálala.
             Si ya la tenías, se actualiza sin perder datos.
-          files: calderilla.apk
+            La huella SHA-256 del archivo está en calderilla.apk.sha256.
+          files: |
+            calderilla.apk
+            calderilla.apk.sha256
           make_latest: true
 
   web:
     name: Web (GitHub Pages)
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: www
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
