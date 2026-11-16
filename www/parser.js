@@ -85,11 +85,64 @@
   }
 
   /* Interpreta texto libre: "café 1,80", "mercadona 45 ayer", "+1500 nómina", "gasolina 60€ el lunes" */
+  const FREQ_WORDS = [
+    [/\s(?:cada\s+semana|semanal(?:mente)?|a\s+la\s+semana|todas\s+las\s+semanas)(?=\s)/i, 'week'],
+    [/\s(?:cada\s+mes|mensual(?:mente)?|al\s+mes|todos\s+los\s+meses)(?=\s)/i, 'month'],
+    [/\s(?:cada\s+a[ñn]o|anual(?:mente)?|al\s+a[ñn]o|todos\s+los\s+a[ñn]os)(?=\s)/i, 'year'],
+  ];
+  /* Siguiente fecha de un pago programado. El día del mes se toma de la fecha de inicio
+     (si empezó un 31, en febrero cae el último día). */
+  function nextDate(iso, freq, anchorDay) {
+    const d = fromISO(iso);
+    if (freq === 'week') { d.setDate(d.getDate() + 7); return toISO(d); }
+    const day = anchorDay || d.getDate();
+    const y = d.getFullYear() + (freq === 'year' ? 1 : 0), m = d.getMonth() + (freq === 'month' ? 1 : 0);
+    const dim = new Date(y, m + 1, 0).getDate();
+    return toISO(new Date(y, m, Math.min(day, dim)));
+  }
+  const SPLIT_RE = /\s(?:(?:a\s+)?pagar\s+)?entre\s+(\d{1,2})(?:\s+personas?)?(?=\s)/i;
+  const HALF_RE = /\sa\s+medias(?=\s)/i;
+
+  /* Bizum o transferencia recibidos: ¿es alguien que te debía su parte de un gasto compartido?
+     inc: { amount, party?, desc?, date }. Devuelve { e, p } (gasto y persona) o null. */
+  const NAME_STOP = /\b(bizum|transferencia|traspaso|recibid[oa]s?|ingreso|pago|de|del|desde|te|ha|han|enviado|por|parte|concepto)\b/g;
+  const nameTokens = s => normalize(s || '').replace(/\(.*?\)/g, ' ').replace(NAME_STOP, ' ').split(/\s+/).filter(w => w.length >= 3);
+  function matchSplit(inc, expenses) {
+    if (!inc || !inc.amount) return null;
+    const who = nameTokens(inc.party || inc.desc);
+    const cands = [];
+    for (const e of expenses || []) {
+      if (!e || e.type === 'income' || !e.split || !Array.isArray(e.split.people)) continue;
+      const age = daysBetween(e.date, inc.date || e.date);
+      if (age < -1 || age > 120) continue;
+      for (const p of e.split.people) {
+        if (p.paid || !p.amount) continue;
+        const pn = nameTokens(p.name);
+        const nameHit = pn.length && who.length && pn.some(a => who.some(b => a === b || (a.length >= 4 && b.startsWith(a)) || (b.length >= 4 && a.startsWith(b))));
+        const diff = Math.abs(p.amount - inc.amount);
+        let score = 0;
+        if (nameHit && diff <= Math.max(100, p.amount * 0.1)) score = diff === 0 ? 4 : 3;
+        else if (diff === 0 && !pn.length) score = 2;          // persona sin nombre: vale el importe exacto
+        else if (diff === 0 && !who.length) score = 1;         // aviso sin nombre: importe exacto
+        if (score) cands.push({ e, p, score, age: Math.max(0, age) });
+      }
+    }
+    if (!cands.length) return null;
+    cands.sort((a, b) => b.score - a.score || a.age - b.age);
+    return { e: cands[0].e, p: cands[0].p };
+  }
+
   function parseQuick(text, learned, now, cats) {
     now = now || new Date();
     let t = ' ' + String(text || '').slice(0, 300).trim() + ' ';
     const res = { amount: null, desc: '', date: toISO(now), type: 'expense', cat: null };
     if (/^\s*\+/.test(t)) { res.type = 'income'; t = t.replace(/^\s*\+/, ' '); }
+    // Pago que se repite: "netflix 12,99 mensual", "gimnasio 40 cada mes", "seguro 300 al año"
+    for (const [re, f] of FREQ_WORDS) { if (re.test(t)) { res.freq = f; t = t.replace(re, ' '); break; } }
+    // Gasto compartido: "cena 100 entre 4", "taxi 30 a medias"
+    const sm = t.match(SPLIT_RE);
+    if (sm && +sm[1] >= 2 && +sm[1] <= 30) { res.splitN = +sm[1]; t = t.replace(sm[0], ' '); }
+    else if (HALF_RE.test(t)) { res.splitN = 2; t = t.replace(HALF_RE, ' '); }
 
     const low = () => normalize(t);
 
@@ -569,7 +622,7 @@
   function looksLikeMoney(text) { CUR_AMT.lastIndex = 0; return CUR_AMT.test(String(text || '')); }
 
   const api = { KNOWN_BANK_APPS, BANKISH, parseBankNotification, looksLikeMoney, parseCSV, parseBankDate, parseBankAmount, detectBankColumns, cleanBankConcept, parseBankRows, CATEGORIES, INCOME_CAT, normalize, toISO, fromISO, daysBetween, parseAmountStr, guessCategory, parseQuick,
-    buildSuggestions, autocomplete, detectRecurring, detectHabits, parseReceipt, groupByDesc };
+    buildSuggestions, autocomplete, detectRecurring, detectHabits, parseReceipt, groupByDesc, matchSplit, nextDate };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Core = api;
 })(typeof window !== 'undefined' ? window : globalThis);

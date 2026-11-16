@@ -6,8 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Calderilla</title>
-<meta name="theme-color" content="#f4f2ec" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#121614" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f3ec">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -15,11 +14,12 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-192.png">
+<script src="theme.js"></script>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="logo">◉</span> Calderilla</div>
+  <div class="greet" id="greet">Hola</div>
   <div class="top-sub" id="topSub"></div>
 </header>
 
@@ -29,16 +29,15 @@
     <div class="hero card">
       <div class="hero-label" id="heroLabel">Gastado este mes</div>
       <div class="hero-amount" id="heroAmount">0 €</div>
-      <div class="hero-meta" id="heroMeta"></div>
+      <div class="hero-sub" id="heroSub"></div>
       <div class="meter" id="heroMeter" hidden><div class="meter-fill"></div></div>
+      <div class="stats" id="heroStats"></div>
     </div>
-
-    <div id="alerts"></div>
 
     <form class="quick card" id="quickForm" autocomplete="off">
       <div class="quick-row">
         <input id="quickInput" type="text" inputmode="text" enterkeyhint="done"
-               placeholder="café 1,80 · súper 45 ayer · ahorro viaje 50" aria-label="Añadir gasto">
+               placeholder="¿Qué has gastado? café 1,80" aria-label="Añadir gasto">
         <label class="icon-btn" title="Foto del ticket" aria-label="Foto del ticket">
           <input type="file" id="ticketInput" accept="image/*" capture="environment" hidden>
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M9 3 7.2 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9Zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
@@ -54,18 +53,32 @@
       <div class="ocr-status" id="ocrStatus" hidden></div>
     </form>
 
-    <div class="section-title" id="shortcutsTitle">Atajos <span class="hint">un toque y apuntado</span></div>
+    <div id="alerts"></div>
+
+    <div class="section-title" id="shortcutsTitle">Atajos</div>
     <div class="shortcuts" id="shortcuts"></div>
 
-    <div class="section-title">Últimos movimientos <button class="link" data-goto="movimientos">Ver todos</button></div>
+    <div class="section-title">Lo último <button class="link" data-goto="movimientos">Ver todo</button></div>
     <div class="card list" id="recentList"></div>
   </section>
 
   <!-- MOVIMIENTOS -->
   <section class="view" id="view-movimientos" hidden>
-    <div class="month-switch"><button class="round" data-month="-1" aria-label="Mes anterior">‹</button><span class="month-label"></span><button class="round" data-month="1" aria-label="Mes siguiente">›</button></div>
-    <div class="search-row"><input class="search" id="search" type="search" placeholder="Buscar…"><label class="btn-ghost" title="Importar extracto del banco">⬆︎ Extracto<input type="file" id="bankInput2" accept=".csv,.xls,.xlsx,.txt,.ods,text/csv" hidden></label></div>
-    <div id="movList"></div>
+    <div class="seg seg-view" id="movSeg"><button data-v="cal">Calendario</button><button data-v="list">Lista</button></div>
+    <div class="search-row"><input class="search" id="search" type="search" placeholder="Buscar en todo…"><label class="btn-ghost" title="Importar extracto del banco">⬆︎ Extracto<input type="file" id="bankInput2" accept=".csv,.xls,.xlsx,.txt,.ods,text/csv" hidden></label></div>
+    <div id="movCal">
+      <div class="cal-nav">
+        <button class="round" id="calPrev" aria-label="Mes anterior">‹</button>
+        <div class="cal-pick"><select id="calMonth" aria-label="Mes"></select><select id="calYear" aria-label="Año"></select></div>
+        <button class="round" id="calNext" aria-label="Mes siguiente">›</button>
+      </div>
+      <div class="card cal-card"><div class="cal-grid" id="calGrid"></div><div class="cal-sum" id="calSum"></div></div>
+      <div id="calDay"></div>
+    </div>
+    <div id="movListWrap">
+      <div class="month-switch" id="movMonthSwitch"><button class="round" data-month="-1" aria-label="Mes anterior">‹</button><span class="month-label"></span><button class="round" data-month="1" aria-label="Mes siguiente">›</button></div>
+      <div id="movList"></div>
+    </div>
   </section>
 
   <!-- ANÁLISIS -->
@@ -80,10 +93,9 @@
     <div class="card" id="paceCard"></div>
     <div class="section-title">Por categoría <span class="hint">toca para ver el detalle</span></div>
     <div class="card" id="catBars"></div>
-    <div class="section-title">Suscripciones y pagos fijos</div>
-    <div class="card" id="subsList"></div>
-    <div class="section-title">¿Dónde puedes ahorrar? <span class="hint">últimos 60 días</span></div>
-    <div class="card" id="habitsList"></div>
+    <div class="section-title">Para revisar con calma</div>
+    <details class="card fold" id="subsFold"><summary><span class="soft-ic">🔁</span><span class="tx"><b>Suscripciones y pagos fijos</b><span id="subsSum"></span></span></summary><div class="body" id="subsList"></div></details>
+    <details class="card fold" id="habitsFold"><summary><span class="soft-ic">🌱</span><span class="tx"><b>¿Dónde puedes ahorrar?</b><span id="habitsSum"></span></span></summary><div class="body" id="habitsList"></div></details>
   </section>
 
   <!-- METAS -->
@@ -95,7 +107,11 @@
 
   <!-- AJUSTES -->
   <section class="view" id="view-ajustes" hidden>
-    <div class="section-title" style="margin-top:6px">Automático <span class="hint">sin dar claves del banco</span></div>
+    <div class="card settings">
+      <div class="set-row"><div><b>Apariencia</b><div class="muted">Fondo claro u oscuro</div></div></div>
+      <div class="seg seg-theme" id="themeSeg"><button data-th="auto">Automático</button><button data-th="light">Claro</button><button data-th="dark">Oscuro</button></div>
+    </div>
+    <div class="section-title">Automático <span class="hint">sin dar claves del banco</span></div>
     <div class="card settings">
       <div id="bankBox"></div>
       <div class="set-row"><div><b>Probar con una notificación</b><div class="muted">Pega el texto de un aviso de tu banco</div></div><button class="btn-ghost" id="bankTestBtn">Probar</button></div>
@@ -103,6 +119,7 @@
     <div class="card settings">
       <div class="set-row"><div><b>Presupuesto mensual</b><div class="muted">Te aviso al 80 % y al 100 %</div></div><button class="btn-ghost" id="setMonthly"></button></div>
       <div class="set-row"><div><b>Día de cobro</b><div class="muted">Tus meses van de nómina a nómina</div></div><button class="btn-ghost" id="paydayBtn">Mes natural</button></div>
+      <div class="set-row"><div><b>Pagos programados</b><div class="muted" id="progCount"></div></div><button class="btn-ghost" id="progBtn">Ver</button></div>
       <div class="set-row"><div><b>Categorías</b><div class="muted" id="catsCount"></div></div><button class="btn-ghost" id="catsBtn">Editar</button></div>
       <div class="set-row"><div><b>Importar extracto del banco</b><div class="muted">CSV o Excel descargado de tu banco</div></div><label class="btn-ghost">Elegir<input type="file" id="bankInput" accept=".csv,.xls,.xlsx,.txt,.ods,text/csv" hidden></label></div>
       <div class="set-row"><div><b>Copia de seguridad</b><div class="muted">Tus datos solo viven en este móvil</div></div><div class="btns"><button class="btn-ghost" id="exportBtn">Exportar</button><label class="btn-ghost">Importar<input type="file" id="importInput" accept="application/json,.json" hidden></label></div></div>
@@ -113,7 +130,7 @@
     <div class="card settings">
       <div class="set-row"><div><b>Notificaciones</b><div class="muted" id="notifStatus"></div></div><button class="btn-ghost" id="notifBtn" hidden>Activar</button></div>
       <div class="set-row"><label class="check" style="margin:0"><input type="checkbox" id="nDaily"> Recordarme apuntar los gastos si no he apuntado nada</label><select id="nHour" class="sel"></select></div>
-      <div class="set-row"><label class="check" style="margin:0"><input type="checkbox" id="nSubs"> Avisarme el día antes de cada cobro fijo (Netflix, gimnasio…)</label></div>
+      <div class="set-row"><label class="check" style="margin:0"><input type="checkbox" id="nSubs"> Avisarme el día antes de los cobros fijos que detecte (puedes silenciar cada uno en Análisis)</label></div>
     </div>
     <div class="card tips">
       <b>Trucos de escritura rápida</b>
@@ -121,6 +138,8 @@
         <li><code>café 1,80</code> → Cafés, hoy</li>
         <li><code>súper 45 ayer</code> · <code>gasolina 60 el lunes</code> · <code>cena 30 3/11</code></li>
         <li><code>+1500 nómina</code> → ingreso</li>
+        <li><code>netflix 12,99 mensual</code> · <code>clases 25 cada semana</code> → se apunta solo y te aviso antes</li>
+        <li><code>cena 100 entre 4</code> · <code>taxi 30 a medias</code> → gasto compartido: cuenta solo tu parte</li>
         <li><code>ahorro viaje 50</code> → aporta 50 € a tu meta «Viaje»</li>
         <li>Si cambias la categoría de algo, la app lo aprende para la próxima vez.</li>
       </ul>
