@@ -105,6 +105,9 @@
 
   <!-- METAS -->
   <section class="view" id="view-metas" hidden>
+    <div class="card" id="saveCard"></div>
+    <div id="saveHistWrap" hidden><div class="section-title">Movimientos del ahorro</div><div class="card list sheet-list" id="saveHist" style="max-height:340px"></div></div>
+    <div class="section-title">Metas <span class="hint">para qué ahorras</span></div>
     <div class="card" id="goalsHead"></div>
     <div id="goalsList"></div>
     <button class="btn-primary" id="newGoal" style="margin-top:4px">+ Nueva meta</button>
@@ -159,7 +162,7 @@
   <button data-tab="inicio" class="active"><svg viewBox="0 0 24 24"><path d="M12 3 3 10v10h6v-6h6v6h6V10z"/></svg>Inicio</button>
   <button data-tab="movimientos"><svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/></svg>Movimientos</button>
   <button data-tab="analisis"><svg viewBox="0 0 24 24"><path d="M5 20V10h3v10zm5.5 0V4h3v16zM16 20v-7h3v7z"/></svg>Análisis</button>
-  <button data-tab="metas"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm0-14a6 6 0 1 0 6 6 6 6 0 0 0-6-6zm0 10a4 4 0 1 1 4-4 4 4 0 0 1-4 4zm0-6a2 2 0 1 0 2 2 2 2 0 0 0-2-2z"/></svg>Metas</button>
+  <button data-tab="metas"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm0-14a6 6 0 1 0 6 6 6 6 0 0 0-6-6zm0 10a4 4 0 1 1 4-4 4 4 0 0 1-4 4zm0-6a2 2 0 1 0 2 2 2 2 0 0 0-2-2z"/></svg>Ahorro</button>
   <button data-tab="ajustes"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.7 7.7 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.7 7.7 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.4-2.7c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>Ajustes</button>
 </nav>
 

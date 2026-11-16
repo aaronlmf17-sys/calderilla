@@ -31,7 +31,7 @@
   const KEY = 'calderilla.v1', OLD_KEY = 'hucha.v1';
   const defaultCats = () => JSON.parse(JSON.stringify(H.CATEGORIES));
   const blank = () => ({ v: 2, expenses: [], budgets: {}, learned: {}, decisions: {}, goals: [], categories: defaultCats(),
-    settings: { monthlyBudget: null, theme: 'auto', movView: 'cal' }, notif: { daily: true, hour: 21, subs: true }, inbox: [], scheduled: [], notifOff: {},
+    settings: { monthlyBudget: null, theme: 'auto', movView: 'cal' }, notif: { daily: true, hour: 21, subs: true }, inbox: [], scheduled: [], notifOff: {}, savings: { on: false, start: null, initial: 0, moves: [], monthly: null, lastAuto: null },
     bank: { enabled: false, auto: true, packages: {}, discovered: {}, discoverUntil: 0, seen: [] } });
   /* Seguridad: todo lo que se carga (almacenamiento o copia importada) pasa por aquí.
      Solo se conservan campos conocidos, con tipo, formato y longitud válidos. */
@@ -113,6 +113,16 @@
         freq: x.freq, start: x.start, next: x.next, day: Number.isInteger(x.day) && x.day >= 1 && x.day <= 31 ? x.day : H.fromISO(x.start).getDate(), notify: x.notify !== false };
     }).filter(Boolean);
     for (const [k, v] of ownEntries(d.notifOff)) { const nk = safeLabel(k, 80); if (nk && v === true) o.notifOff[nk] = true; }
+    // ahorro
+    const sv = isObj(d.savings) ? d.savings : {};
+    if (sv.on === true && DATE_RE.test(String(sv.start))) {
+      const int = v => (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) < MAX_CENTS) ? Math.round(v) : 0;
+      o.savings = { on: true, start: sv.start, initial: int(sv.initial),
+        moves: (Array.isArray(sv.moves) ? sv.moves : []).slice(0, 5000).filter(x => isObj(x) && DATE_RE.test(String(x.date)) && int(x.amount))
+          .map(x => ({ id: ID_RE.test(String(x.id)) ? x.id : uid(), date: x.date, amount: int(x.amount), note: safeText(x.note, 60) })),
+        monthly: isObj(sv.monthly) && posCents(sv.monthly.amount) && Number.isInteger(sv.monthly.day) && sv.monthly.day >= 1 && sv.monthly.day <= 28 ? { amount: posCents(sv.monthly.amount), day: sv.monthly.day } : null,
+        lastAuto: DATE_RE.test(String(sv.lastAuto)) ? sv.lastAuto : null };
+    }
     // ajustes
     const st = isObj(d.settings) ? d.settings : {};
     o.settings.monthlyBudget = posCents(st.monthlyBudget);
@@ -1225,6 +1235,144 @@
     switchTab('analisis');
   };
 
+  /* ---------- Ahorro ----------
+     Tu ahorro = lo que tenías al empezar + lo que te sobra cada mes cerrado (ingresos − gastos)
+     + lo que metes o sacas a mano este mes. Al cerrar el mes, lo que metiste ya forma parte de lo
+     que te sobró, así que no se cuenta dos veces. */
+  const sumBetween = (from, to, type) => S.expenses.filter(e => (type === 'income' ? e.type === 'income' : e.type !== 'income') && e.date >= from && e.date <= to).reduce((t, e) => t + e.amount, 0);
+  function savingsCalc() {
+    const sv = S.savings; if (!sv.on) return null;
+    const cur = periodOf(todayISO()), curR = periodRange(cur.y, cur.m);
+    const lines = [{ kind: 'init', date: sv.start, amount: sv.initial, label: 'Ahorro inicial' }];
+    let total = sv.initial, p = periodOf(sv.start), guard = 0;
+    while ((p.y < cur.y || (p.y === cur.y && p.m < cur.m)) && guard++ < 360) {
+      const r = periodRange(p.y, p.m), from = r.startISO > sv.start ? r.startISO : sv.start;
+      if (from <= r.endISO) {
+        const result = sumBetween(from, r.endISO, 'income') - sumBetween(from, r.endISO, 'expense');
+        const movesIn = sv.moves.filter(x => x.date >= from && x.date <= r.endISO).reduce((t, x) => t + x.amount, 0);
+        total += result;
+        const rest = result - movesIn;
+        if (rest) lines.push({ kind: 'month', date: r.endISO, amount: rest, label: (rest > 0 ? 'Sobró en ' : 'Faltó en ') + monthName(p.y, p.m).replace(/ de \d{4}$/, '').toLowerCase() });
+      }
+      p = shiftPeriod(p.y, p.m, 1);
+    }
+    const from = curR.startISO > sv.start ? curR.startISO : sv.start;
+    const curMoves = sv.moves.filter(x => x.date >= from);
+    total += curMoves.reduce((t, x) => t + x.amount, 0);
+    sv.moves.forEach(x => lines.push({ kind: 'move', id: x.id, date: x.date, amount: x.amount, label: x.note || (x.amount > 0 ? 'Metido en el ahorro' : 'Sacado del ahorro') }));
+    const pending = sumBetween(from, todayISO(), 'income') - sumBetween(from, todayISO(), 'expense') - curMoves.reduce((t, x) => t + x.amount, 0);
+    lines.sort((a, b) => b.date.localeCompare(a.date) || (a.kind === 'init' ? 1 : -1));
+    return { total, pending, lines, curIn: curMoves.filter(x => x.amount > 0).reduce((t, x) => t + x.amount, 0), curOut: -curMoves.filter(x => x.amount < 0).reduce((t, x) => t + x.amount, 0), curEnd: curR.endISO };
+  }
+  // Aportación automática cada mes (opcional)
+  function runSavingsAuto() {
+    const sv = S.savings; if (!sv.on || !sv.monthly) return;
+    const today = todayISO(); let d = sv.lastAuto ? H.fromISO(sv.lastAuto) : H.fromISO(sv.start), changed = false, guard = 0;
+    // siguiente fecha con ese día del mes, posterior a la última aportación
+    const next = from => { const x = new Date(from.getFullYear(), from.getMonth(), sv.monthly.day); if (x <= from) x.setMonth(x.getMonth() + 1); return x; };
+    let n = sv.lastAuto ? next(d) : (() => { const x = new Date(d.getFullYear(), d.getMonth(), sv.monthly.day); if (H.toISO(x) < sv.start) x.setMonth(x.getMonth() + 1); return x; })();
+    while (H.toISO(n) <= today && guard++ < 120) {
+      sv.moves.push({ id: uid(), date: H.toISO(n), amount: sv.monthly.amount, note: 'Aportación automática' });
+      sv.lastAuto = H.toISO(n); changed = true; n = next(n);
+    }
+    if (changed) save();
+  }
+  function renderSavings() {
+    const card = $('#saveCard'), hist = $('#saveHist');
+    if (!S.savings.on) {
+      card.innerHTML = '<div class="save-hero"><div class="hero-label">Tu ahorro</div><p class="muted" style="margin:6px 0 14px;line-height:1.45">Apunta cuánto tienes ahorrado ahora y desde aquí lo llevo yo: cada mes te sumo lo que te sobre (lo que entra menos lo que gastas). También puedes meter o sacar dinero cuando quieras.</p>'
+        + '<button class="btn-primary" id="svStart">Empezar: ¿cuánto tengo ahorrado?</button></div>';
+      $('#svStart').onclick = () => savingsSetupSheet();
+      $('#saveHistWrap').hidden = true; return;
+    }
+    const c = savingsCalc(), inGoals = S.goals.reduce((t, g) => t + goalSaved(g), 0);
+    const endTxt = H.fromISO(c.curEnd).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' });
+    card.innerHTML = '<div class="save-hero"><div class="row-between"><div class="hero-label">Tu ahorro</div><button class="link" id="svCfg">Ajustes</button></div>'
+      + '<div class="hero-amount' + (c.total < 0 ? ' over' : '') + '">' + money(c.total) + '</div>'
+      + (inGoals ? '<div class="hero-sub">De esto, ' + money0(inGoals) + ' están apartados en tus metas.</div>' : '')
+      + '<div class="save-btns"><button class="btn-ghost" id="svOut">− Sacar</button><button class="btn-primary" id="svIn">+ Meter</button></div>'
+      + '<div class="save-month">' + (c.curIn || c.curOut ? 'Este mes has ' + [c.curIn ? 'metido <b>' + money(c.curIn) + '</b>' : '', c.curOut ? 'sacado <b>' + money(c.curOut) + '</b>' : ''].filter(Boolean).join(' y ') + '. ' : '')
+      + (c.pending > 0 ? 'Si el mes acaba como va, el ' + endTxt + ' se sumarán <b class="ok-txt">' + money0(c.pending) + '</b> más.' : c.pending < 0 ? 'Ahora mismo este mes vas <b class="warn-txt">' + money0(-c.pending) + '</b> por debajo; si acaba así, se restará del ahorro.' : 'Al cerrar el mes (' + endTxt + ') te sumaré lo que te sobre.')
+      + (S.savings.monthly ? '<br>🔁 Cada día ' + S.savings.monthly.day + ' se meten ' + money0(S.savings.monthly.amount) + ' solos.' : '') + '</div></div>';
+    $('#svIn').onclick = () => savingsMoveSheet(false);
+    $('#svOut').onclick = () => savingsMoveSheet(true);
+    $('#svCfg').onclick = savingsConfigSheet;
+    $('#saveHistWrap').hidden = false;
+    hist.innerHTML = c.lines.slice(0, 60).map(l => '<' + (l.kind === 'move' ? 'button data-svm="' + esc(l.id) + '"' : 'div') + ' class="row">'
+      + '<span class="em" style="background:var(--' + (l.amount >= 0 ? 'accent' : 'gold') + '-soft)">' + (l.kind === 'init' ? '🏦' : l.kind === 'month' ? '📅' : l.amount > 0 ? '⬇️' : '⬆️') + '</span>'
+      + '<span class="mid"><div class="d">' + esc(l.label) + '</div><div class="s">' + H.fromISO(l.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' }) + '</div></span>'
+      + '<span class="amt' + (l.amount >= 0 ? ' inc' : '') + '">' + (l.amount >= 0 ? '+' : '−') + money(Math.abs(l.amount)) + '</span></' + (l.kind === 'move' ? 'button' : 'div') + '>').join('');
+    hist.onclick = ev => {
+      const b = ev.target.closest('[data-svm]'); if (!b) return;
+      const m = S.savings.moves.find(x => x.id === b.dataset.svm); if (!m) return;
+      openSheet('<h3>' + esc(m.note || (m.amount > 0 ? 'Metido en el ahorro' : 'Sacado del ahorro')) + '</h3><p class="muted">' + (m.amount > 0 ? '+' : '−') + money(Math.abs(m.amount)) + ' · ' + H.fromISO(m.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }) + '</p>'
+        + '<div class="actions"><button class="btn-ghost" id="mvNo">Cerrar</button><button class="btn-primary" style="background:var(--danger)" id="mvDel">Borrar este movimiento</button></div>', sh => {
+        $('#mvNo', sh).onclick = closeSheet;
+        $('#mvDel', sh).onclick = () => { const i = S.savings.moves.indexOf(m); S.savings.moves.splice(i, 1); save(); closeSheet(); renderAll(); toast('Movimiento borrado', 'Deshacer', () => { S.savings.moves.splice(i, 0, m); save(); renderAll(); }); };
+      });
+    };
+  }
+  function savingsSetupSheet() {
+    const sv = S.savings;
+    openSheet('<h3>¿Cuánto tienes ahorrado ahora?</h3><p class="muted">Lo que tengas en la cuenta de ahorro, en la hucha… Si no tienes nada, pon 0. Desde hoy te iré sumando lo que te sobre cada mes.</p>'
+      + '<label class="field"><span>Ahorro actual (€)</span><input id="svIni" inputmode="decimal" placeholder="0,00" value="' + (sv.on && sv.initial ? (sv.initial / 100).toFixed(2).replace('.', ',') : '') + '"></label>'
+      + '<div class="actions"><button class="btn-ghost" id="svNo">Cancelar</button><button class="btn-primary" id="svOk">Guardar</button></div>', sh => {
+      const inp = $('#svIni', sh); setTimeout(() => inp.focus(), 60);
+      $('#svNo', sh).onclick = closeSheet;
+      $('#svOk', sh).onclick = () => {
+        const v = inp.value.trim() ? H.parseAmountStr(inp.value) : 0;
+        if (v == null || v < 0 || v >= MAX_CENTS) return inp.focus();
+        if (!sv.on) Object.assign(sv, { on: true, start: todayISO(), moves: [], monthly: null, lastAuto: null });
+        sv.initial = v; save(); closeSheet(); renderAll(); toast('Ahorro guardado');
+      };
+    });
+  }
+  function savingsMoveSheet(withdraw) {
+    const sv = S.savings;
+    openSheet('<h3>' + (withdraw ? '− Sacar del ahorro' : '+ Meter en el ahorro') + '</h3>'
+      + '<label class="field"><span>Cantidad (€)</span><input id="mvAmt" inputmode="decimal" placeholder="300,00"></label>'
+      + '<div class="cat-picker" id="mvQuick" style="padding-top:0;margin-bottom:12px">' + [5000, 10000, 20000, 30000].map(v => '<button type="button" class="chip" data-v="' + v + '">' + money0(v) + '</button>').join('') + '</div>'
+      + '<label class="field"><span>Nota (opcional)</span><input id="mvNote" placeholder="' + (withdraw ? 'Para el coche, imprevisto…' : 'Lo de este mes, la paga extra…') + '"></label>'
+      + '<label class="field"><span>Fecha</span><input id="mvDate" type="date" value="' + todayISO() + '"></label>'
+      + (withdraw ? '' : '<label class="check"><input type="checkbox" id="mvRep"' + (sv.monthly ? ' checked' : '') + '> <span>Meterlo solo todos los meses el día <select id="mvDay" class="sel">' + Array.from({ length: 28 }, (_, i) => '<option' + ((sv.monthly ? sv.monthly.day : payday()) === i + 1 ? ' selected' : '') + '>' + (i + 1) + '</option>').join('') + '</select></span></label>')
+      + '<div class="actions"><button class="btn-ghost" id="mvNo">Cancelar</button><button class="btn-primary" id="mvOk">' + (withdraw ? 'Sacar' : 'Meter') + '</button></div>', sh => {
+      const inp = $('#mvAmt', sh); setTimeout(() => inp.focus(), 60);
+      $('#mvQuick', sh).onclick = ev => { const b = ev.target.closest('[data-v]'); if (b) inp.value = (b.dataset.v / 100) + ''; };
+      $('#mvNo', sh).onclick = closeSheet;
+      $('#mvOk', sh).onclick = () => {
+        const v = H.parseAmountStr(inp.value); if (!v || v <= 0 || v >= MAX_CENTS) return inp.focus();
+        const date = DATE_RE.test($('#mvDate', sh).value) ? $('#mvDate', sh).value : todayISO();
+        sv.moves.push({ id: uid(), date: date < sv.start ? sv.start : date, amount: withdraw ? -v : v, note: safeText($('#mvNote', sh).value, 60) });
+        const rep = $('#mvRep', sh);
+        if (rep) { if (rep.checked) { sv.monthly = { amount: v, day: +$('#mvDay', sh).value }; sv.lastAuto = date; } else sv.monthly = null; }
+        save(); closeSheet(); renderAll();
+        toast(withdraw ? 'Sacado ' + money(v) + ' del ahorro' : '💰 ' + money(v) + ' al ahorro' + (sv.monthly && !withdraw ? ' · y cada día ' + sv.monthly.day : ''));
+      };
+    });
+  }
+  function savingsConfigSheet() {
+    const sv = S.savings;
+    openSheet('<h3>Ajustes del ahorro</h3>'
+      + '<div class="set-row"><div><b>Lo que tenías al empezar</b><div class="muted">' + money(sv.initial) + ' el ' + H.fromISO(sv.start).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }) + '</div></div><button class="btn-ghost" id="cfIni">Cambiar</button></div>'
+      + '<div class="set-row"><div><b>Aportación automática</b><div class="muted">' + (sv.monthly ? money0(sv.monthly.amount) + ' cada día ' + sv.monthly.day : 'Ninguna') + '</div></div>' + (sv.monthly ? '<button class="btn-ghost" id="cfStop">Quitar</button>' : '<button class="btn-ghost" id="cfAdd">Poner</button>') + '</div>'
+      + '<div class="set-row"><div><b>Cuadrar con el banco</b><div class="muted">Si tu ahorro real es otro, lo ajusto</div></div><button class="btn-ghost" id="cfFix">Ajustar</button></div>'
+      + '<p class="muted small">Cómo se calcula: lo que tenías al empezar + lo que te sobra cada mes (lo que entra menos lo que gastas) + lo que metes o sacas este mes. Lo que metes a mano ya forma parte de lo que te sobra, así que no cuenta dos veces.</p>'
+      + '<div class="actions"><button class="btn-ghost danger" id="cfOff">Dejar de usarlo</button><button class="btn-primary" id="cfClose">Cerrar</button></div>', sh => {
+      $('#cfClose', sh).onclick = closeSheet;
+      $('#cfIni', sh).onclick = savingsSetupSheet;
+      const st = $('#cfStop', sh); if (st) st.onclick = () => { sv.monthly = null; save(); savingsConfigSheet(); renderAll(); };
+      const ad = $('#cfAdd', sh); if (ad) ad.onclick = () => savingsMoveSheet(false);
+      $('#cfFix', sh).onclick = () => {
+        const c = savingsCalc();
+        openSheet('<h3>Cuadrar con el banco</h3><p class="muted">Ahora la app dice ' + money(c.total) + '. ¿Cuánto tienes de verdad?</p><label class="field"><span>Ahorro real (€)</span><input id="fxIn" inputmode="decimal"></label><div class="actions"><button class="btn-ghost" id="fxNo">Cancelar</button><button class="btn-primary" id="fxOk">Ajustar</button></div>', s2 => {
+          const i = $('#fxIn', s2); setTimeout(() => i.focus(), 60); $('#fxNo', s2).onclick = closeSheet;
+          $('#fxOk', s2).onclick = () => { const v = H.parseAmountStr(i.value); if (v == null || v < 0) return i.focus(); const diff = v - c.total; if (diff) sv.moves.push({ id: uid(), date: todayISO(), amount: diff, note: 'Ajuste para cuadrar' }); save(); closeSheet(); renderAll(); toast('Ahorro ajustado a ' + money(v)); };
+        });
+      };
+      $('#cfOff', sh).onclick = () => { const prev = JSON.parse(JSON.stringify(sv)); S.savings = { on: false, start: null, initial: 0, moves: [], monthly: null, lastAuto: null }; save(); closeSheet(); renderAll(); toast('Ahorro desactivado', 'Deshacer', () => { S.savings = prev; save(); renderAll(); }, 7000); };
+    });
+  }
+
   /* ---------- Metas de ahorro ---------- */
   const goalSaved = g => g.entries.reduce((s, e) => s + e.amount, 0);
   const monthsUntil = ym => { const [y, m] = ym.split('-').map(Number); const n = new Date(); return (y - n.getFullYear()) * 12 + (m - 1 - n.getMonth()) + (1 - (n.getDate() - 1) / 30); };
@@ -1266,6 +1414,7 @@
   }
 
   function renderMetas() {
+    renderSavings();
     const box = $('#goalsList');
     const totalSaved = S.goals.reduce((s, g) => s + goalSaved(g), 0);
     const cut = cutSavingsYearly();
@@ -1278,7 +1427,7 @@
       head += '<div class="savings-total" style="margin-top:12px">✂️ Lo que marcaste para recortar son <b>' + money0(cut / 12) + '/mes</b>. '
         + (mNow ? 'Aportándolo a «' + esc(firstOpen.name) + '» llegarías <b>' + Math.max(1, Math.round(mNow - mCut)) + ' ' + (Math.round(mNow - mCut) === 1 ? 'mes' : 'meses') + ' antes</b>.' : 'Con eso completarías «' + esc(firstOpen.name) + '» en unos ' + Math.ceil(mCut) + ' meses.') + '</div>';
     }
-    $('#goalsHead').innerHTML = head;
+    $('#goalsHead').innerHTML = head; $('#goalsHead').hidden = !S.goals.length;
     if (!S.goals.length) {
       box.innerHTML = '<div class="card empty" style="padding:18px">Crea tu primera meta: un viaje, un colchón para imprevistos, un móvil nuevo… Te diré cuánto apartar al mes y si vas bien de ritmo.<br><br>Atajo: escribe <code>ahorro viaje 50</code> en Inicio para aportar sin entrar aquí.</div>';
       return;
@@ -1819,7 +1968,7 @@
         else if (go === 'prog') { switchTab('ajustes'); setTimeout(scheduledSheet, 200); }
         else if (go) switchTab(go);
       });
-      APP.addListener('resume', () => { runScheduled(); bankStart(); renderAll(); });
+      APP.addListener('resume', () => { runScheduled(); runSavingsAuto(); bankStart(); renderAll(); });
       APP.addListener('backButton', () => {
         if (!$('#sheet').hidden) closeSheet();
         else if (currentTab !== 'inicio') switchTab('inicio');
@@ -1830,7 +1979,7 @@
   }
 
   /* ---------- Navegación ---------- */
-  const TAB_TITLES = { movimientos: 'Movimientos', analisis: 'Análisis', metas: 'Metas de ahorro', ajustes: 'Ajustes' };
+  const TAB_TITLES = { movimientos: 'Movimientos', analisis: 'Análisis', metas: 'Ahorro', ajustes: 'Ajustes' };
   function switchTab(t) {
     currentTab = t;
     if (t !== 'inicio') { $('#greet').textContent = TAB_TITLES[t]; $('#topSub').textContent = ''; }
@@ -1858,7 +2007,7 @@
   // Atajos del icono (manifest shortcuts) y ruta por hash
   const params = new URLSearchParams(location.search);
   const startTab = ['movimientos', 'analisis', 'metas', 'ajustes'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'inicio';
-  runScheduled();
+  runScheduled(); runSavingsAuto();
   switchTab(startTab);
   if (params.has('add')) setTimeout(() => qi.focus(), 300);
   bankStart();
@@ -1866,7 +2015,7 @@
   if (params.has('scan')) { $('#ocrStatus').hidden = false; $('#ocrStatus').innerHTML = '📷 Toca el icono de la cámara para fotografiar el ticket.'; }
   window.addEventListener('hashchange', () => { const h = location.hash.slice(1) || 'inicio'; if (h !== currentTab && ['inicio', 'movimientos', 'analisis', 'metas', 'ajustes'].includes(h)) switchTab(h); });
   // Refresca atajos al volver a la app (cambian según la hora)
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { runScheduled(); renderAll(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { runScheduled(); runSavingsAuto(); renderAll(); } });
 
   // Service worker (solo cuando se sirve desde tu propio dominio)
   if (!NATIVE && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {

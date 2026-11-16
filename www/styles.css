@@ -368,3 +368,11 @@ input.q-sel[type=date] { background-image: none; padding-right: 10px; }
 .q-hint:empty { display: none; }
 #addBtn { margin-top: 12px; }
 .quick .auto { margin-top: 2px; }
+
+/* ---------- Ahorro ---------- */
+.save-hero { padding: 4px 2px; }
+.row-between { display: flex; justify-content: space-between; align-items: baseline; }
+.save-btns { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; margin: 16px 0 12px; }
+.save-btns .btn-ghost { padding: 13px; font-size: 15px; }
+.save-month { font-size: 14px; color: var(--muted); line-height: 1.45; padding-top: 12px; border-top: 1px solid var(--line); }
+.save-month b { color: var(--ink); }
