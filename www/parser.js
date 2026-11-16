@@ -27,7 +27,7 @@
   ];
   const INCOME_CAT = { id: 'ingreso', name: 'Ingreso', emoji: '💶', color: '#2b8a3e' };
 
-  const INCOME_WORDS = ['nomina', 'ingreso', 'cobro', 'sueldo', 'salario', 'devolucion', 'reembolso', 'me pagan', 'me devuelven', 'paga extra', 'bizum recibido', 'he cobrado', 'venta', 'vendido', 'wallapop venta'];
+  const INCOME_WORDS = ['nomina', 'ingreso', 'cobro', 'sueldo', 'salario', 'devolucion', 'reembolso', 'me pagan', 'me devuelven', 'paga extra', 'bizum recibido', 'bizum de', 'me ha pagado', 'me han pagado', 'he cobrado', 'venta', 'vendido', 'wallapop venta'];
 
   const WEEKDAYS = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
 

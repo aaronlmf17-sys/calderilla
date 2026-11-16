@@ -162,7 +162,6 @@
   let viewMonth; // se fija justo después de definir los periodos
   let currentTab = 'inicio';
   let draft = null;       // resultado de parseQuick
-  let draftCatManual = null;
 
   const monthKey = (y, m) => y + '-' + String(m + 1).padStart(2, '0');
   /* Un "mes" de la app va de nómina a nómina. Con día de cobro 28, «noviembre» = 28 oct – 27 nov.
@@ -265,7 +264,7 @@
   function addExpense(e, opts) {
     const item = Object.assign({ id: uid(), ts: Date.now(), type: 'expense' }, e);
     if (item.date !== todayISO()) { const d = H.fromISO(item.date); const n = new Date(); d.setHours(n.getHours(), n.getMinutes()); item.ts = +d; }
-    if (item.type === 'income' && !(opts && opts.noSettle) && settleFromIncome(item)) { renderAll(); $('#quickInput').blur(); return null; }
+    if (item.type === 'income' && !(opts && opts.noSettle) && settleFromIncome(item)) { renderAll(); return null; }
     delete item.party;
     S.expenses.push(item);
     if (item.desc && item.type !== 'income') S.learned[H.normalize(item.desc)] = item.cat;
@@ -278,7 +277,6 @@
     });
     checkBudgetCross(item);
     renderAll();
-    if (!(opts && opts.keepFocus)) $('#quickInput').blur();
     return item;
   }
 
@@ -299,83 +297,119 @@
     check(S.settings.monthlyBudget, spentIn(y, m), 'tu presupuesto del mes');
   }
 
-  /* ---------- Entrada rápida ---------- */
-  const qi = $('#quickInput');
-  function updateDraft() {
-    const txt = qi.value;
-    if (!txt.trim()) { draft = null; draftCatManual = null; $('#preview').hidden = true; $('#catPicker').hidden = true; renderAuto(''); return; }
-    draft = H.parseQuick(txt, S.learned, new Date(), cats());
-    draft.goal = matchGoal(txt, draft);
-    if (draftCatManual && draft.type !== 'income') draft.cat = draftCatManual;
-    const c = catById(draft.cat);
-    $('#preview').hidden = false;
-    if (draft.goal) {
-      const g = draft.goal;
-      $('#previewCat').textContent = (g.emoji || '🎯') + ' Meta';
-      $('#previewText').innerHTML = (draft.amount != null ? '<b>' + money(draft.amount) + '</b> · ' : '<i>falta el importe</i> · ') + 'aportar a ' + esc(g.name);
-      $('#addBtn').disabled = !draft.amount; $('#addBtn').textContent = 'Aportar';
-      renderAuto(''); return;
-    }
-    $('#addBtn').textContent = 'Añadir';
-    $('#previewCat').textContent = c.emoji + ' ' + c.name;
-    const when = draft.date === todayISO() ? 'hoy' : H.fromISO(draft.date).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' });
-    const freqTxt = draft.freq && draft.type !== 'income' ? ' · 🔁 ' + FREQ_TXT[draft.freq] : '';
-    const splitTxt = draft.splitN && draft.type !== 'income' && draft.amount ? ' · 👥 entre ' + draft.splitN + ', tu parte ' + money(draft.amount - Math.floor(draft.amount / draft.splitN) * (draft.splitN - 1)) : '';
-    $('#previewText').innerHTML = (draft.amount != null ? '<b>' + (draft.type === 'income' ? '+' : '') + money(draft.amount) + '</b> · ' : '<i>falta el importe</i> · ') + esc(draft.desc || c.name) + ' · ' + when + splitTxt + freqTxt;
-    $('#addBtn').disabled = draft.amount == null || draft.amount <= 0;
-    renderAuto(txt);
+  /* ---------- Formulario de alta (Inicio) ----------
+     Campos claros: concepto, importe, categoría, fecha, compartido y repetición.
+     Por debajo sigue entendiendo el texto libre ("café 1,80", "netflix 12,99 mensual"…). */
+  const qi = $('#quickInput'), qa = $('#qAmt');
+  let autoOpen = false;
+  const Q = { type: 'expense', typeManual: false, cat: null, date: null, freq: '', split: false };
+  const centsField = c => (c / 100).toFixed(2).replace('.', ',');
+  function readDraft() {
+    const desc = qi.value.trim(), amtTxt = qa.value.trim();
+    if (!desc && !amtTxt) return null;
+    const fieldAmt = amtTxt ? H.parseAmountStr(amtTxt) : null;
+    const p = H.parseQuick(desc + (fieldAmt ? ' ' + centsField(fieldAmt) + '€' : ''), S.learned, new Date(), cats());
+    p.goal = matchGoal(desc + ' ' + (amtTxt || ''), p);
+    if (fieldAmt) p.amount = fieldAmt;
+    if (!Q.typeManual && p.type === 'income') Q.type = 'income';
+    p.type = Q.type;
+    p.cat = p.type === 'income' ? 'ingreso' : (Q.cat || (p.cat === 'ingreso' ? H.guessCategory(p.desc, S.learned, cats()) : p.cat));
+    if (Q.date) p.date = Q.date;
+    if (Q.freq) p.freq = Q.freq;
+    if (p.type === 'income') { p.freq = ''; p.splitN = 0; }
+    p.wantSplit = p.type !== 'income' && (Q.split || p.splitN >= 2);
+    return p;
   }
-  qi.addEventListener('input', updateDraft);
+  function paintQuick() {
+    draft = readDraft();
+    $$('#qType button').forEach(b => b.classList.toggle('on', b.dataset.t === Q.type));
+    const inc = Q.type === 'income';
+    $('#qCatF').hidden = inc; $('#qSplitF').hidden = inc; $('#qRepF').hidden = inc;
+    // categoría: desplegable con la que adivino, salvo que la elijas tú
+    const sel = $('#qCat'), cur = draft && draft.cat !== 'ingreso' ? draft.cat : (Q.cat || 'otros');
+    sel.innerHTML = cats().map(c => '<option value="' + esc(c.id) + '"' + (c.id === cur ? ' selected' : '') + '>' + esc(c.emoji + ' ' + c.name) + '</option>').join('');
+    sel.value = cur;
+    const d = (draft && draft.date) || Q.date || todayISO();
+    if ($('#qDate').value !== d) $('#qDate').value = d;
+    const split = !!(draft ? draft.wantSplit : Q.split);
+    $('#qSplit').value = split ? '1' : ''; $('#qSplit').classList.toggle('on', split);
+    const f = (draft ? draft.freq : Q.freq) || '';
+    $('#qRep').value = f; $('#qRep').classList.toggle('on', !!f);
+    const btn = $('#addBtn'), hint = $('#qHint');
+    hint.textContent = '';
+    if (draft && draft.goal) { btn.textContent = 'Aportar a «' + draft.goal.name + '»'; btn.disabled = !draft.amount; }
+    else if (!inc && split) {
+      btn.textContent = 'Siguiente: ¿con quién lo compartes?'; btn.disabled = !(draft && draft.amount);
+      hint.textContent = draft && draft.amount ? 'Luego pones los nombres y lo que te debe cada uno. En tus cuentas solo cuenta tu parte.' : 'Pon el total que has pagado tú.';
+    } else {
+      btn.textContent = inc ? 'Añadir ingreso' : 'Añadir gasto'; btn.disabled = !draft || !draft.amount || draft.amount <= 0;
+      if (f && draft && draft.amount) hint.textContent = 'Se apuntará solo ' + FREQ_TXT[f] + ' y te aviso el día antes (puedes silenciarlo).';
+    }
+    renderAuto(qi.value);
+  }
+  function clearQuick() {
+    qi.value = ''; qa.value = ''; autoOpen = false; $('#qDrop').classList.remove('on');
+    Object.assign(Q, { type: 'expense', typeManual: false, cat: null, date: null, freq: '', split: false });
+    $('#autoList').innerHTML = '';
+    paintQuick();
+  }
+  const updateDraft = paintQuick; // compatibilidad con el resto del código
+  qi.addEventListener('input', paintQuick);
+  qa.addEventListener('input', paintQuick);
+  qi.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); if (!qa.value.trim() && !(draft && draft.amount)) qa.focus(); else $('#quickForm').requestSubmit(); } });
+  $('#qType').onclick = ev => { const b = ev.target.closest('[data-t]'); if (!b) return; Q.type = b.dataset.t; Q.typeManual = true; paintQuick(); };
+  $('#qDate').addEventListener('change', ev => { if (DATE_RE.test(ev.target.value)) Q.date = ev.target.value; paintQuick(); });
+  $('#qCat').addEventListener('change', ev => { Q.cat = ev.target.value; paintQuick(); });
+  $('#qSplit').addEventListener('change', ev => { Q.split = ev.target.value === '1'; paintQuick(); if (Q.split && !qa.value.trim()) qa.focus(); });
+  $('#qRep').addEventListener('change', ev => { Q.freq = ev.target.value; paintQuick(); });
   $('#quickForm').addEventListener('submit', ev => {
     ev.preventDefault();
-    if (!draft || !draft.amount) { qi.focus(); return; }
-    if (draft.goal) { contribute(draft.goal, draft.amount); qi.value = ''; updateDraft(); qi.blur(); return; }
-    const base = { amount: draft.amount, desc: draft.desc || catById(draft.cat).name, cat: draft.cat, date: draft.date, type: draft.type };
-    if (draft.freq && draft.type !== 'income' && !draft.splitN) {
-      const f = draft.freq; const it = addExpense(base); qi.value = ''; updateDraft();
-      if (it) { const sc = makeSchedule(it, f, true); save(); renderAll(); setTimeout(() => toast('🔁 Programado ' + FREQ_TXT[sc.freq] + '. Te aviso el día antes de cada cargo.', 'Ajustar', () => scheduleEditSheet(sc), 6000), 300); }
+    const d = readDraft();
+    if (!d || !d.amount) { (qi.value.trim() ? qa : qi).focus(); return; }
+    if (d.goal) { contribute(d.goal, d.amount); clearQuick(); qi.blur(); qa.blur(); return; }
+    const base = { amount: d.amount, desc: d.desc || (d.type === 'income' ? 'Ingreso' : catById(d.cat).name), cat: d.cat, date: d.date, type: d.type };
+    if (d.wantSplit) {
+      // la tabla de con quién lo compartes, en la hoja de alta
+      const people = d.splitN >= 2 ? evenSplit(d.amount, d.splitN) : null;
+      editSheet(null, { date: d.date, prefill: base, split: people || true, freq: d.freq || '', focusSplit: true, onSaved: clearQuick });
       return;
     }
-    if (draft.splitN && draft.type !== 'income') {
-      const people = evenSplit(draft.amount, draft.splitN);
-      base.split = { total: draft.amount, people }; base.amount = draft.amount - people.reduce((t, p) => t + p.amount, 0);
-      const it = addExpense(base); qi.value = ''; updateDraft();
-      if (it) setTimeout(() => editSheet(it, { focusSplit: true }), 250);
-      return;
+    const it = addExpense(base);
+    if (it && d.freq) {
+      const sc = makeSchedule(it, d.freq, true); save(); renderAll();
+      setTimeout(() => toast('🔁 Programado ' + FREQ_TXT[sc.freq] + '. Te aviso el día antes de cada cargo.', 'Ajustar', () => scheduleEditSheet(sc), 6000), 300);
     }
-    addExpense(base);
-    qi.value = ''; updateDraft();
-  });
-  $('#previewCat').onclick = () => {
-    if (draft && draft.goal) { switchTab('metas'); return; }
-    const p = $('#catPicker');
-    if (!p.hidden) { p.hidden = true; return; }
-    p.innerHTML = cats().map(c => '<button type="button" class="chip' + (draft && draft.cat === c.id ? ' sel' : '') + '" data-cat="' + esc(c.id) + '">' + esc(c.emoji + ' ' + c.name) + '</button>').join('')
-      + '<button type="button" class="chip' + (draft && draft.type === 'income' ? ' sel' : '') + '" data-cat="ingreso">💶 Es un ingreso</button>';
-    p.hidden = false;
-  };
-  $('#catPicker').addEventListener('click', ev => {
-    const b = ev.target.closest('[data-cat]'); if (!b) return;
-    const id = b.dataset.cat;
-    if (id === 'ingreso') { if (!qi.value.trim().startsWith('+')) qi.value = '+' + qi.value.trim(); draftCatManual = null; }
-    else { qi.value = qi.value.replace(/^\s*\+/, ''); draftCatManual = id; }
-    $('#catPicker').hidden = true; updateDraft(); qi.focus();
+    clearQuick(); qi.blur(); qa.blur();
   });
 
+  // Conceptos: sugerencias mientras escribes y desplegable con los habituales
+  function pickConcept(a) {
+    qi.value = a.desc;
+    if (!qa.value.trim()) qa.value = centsField(a.amount);
+    if (!Q.typeManual) Q.type = 'expense';
+    Q.cat = a.cat; autoOpen = false; paintQuick(); qa.focus(); qa.select();
+  }
   function renderAuto(txt) {
     const box = $('#autoList');
-    const words = txt.replace(/[\d.,€]+/g, ' ').trim();
-    if (!words || words.length < 2) { box.innerHTML = ''; return; }
-    const items = H.autocomplete(S.expenses, words, 3).filter(a => H.normalize(a.desc) !== H.normalize(draft && draft.desc));
+    const words = (txt || '').replace(/[\d.,€]+/g, ' ').trim();
+    let items = [];
+    if (autoOpen && words.length < 2) {
+      items = H.buildSuggestions(S.expenses, new Date(), 10).map(s => ({ key: s.key, desc: s.desc, amount: s.amount, cat: s.cat }));
+      // con pocos datos: los últimos conceptos distintos
+      const seen = new Set(items.map(i => H.normalize(i.desc)));
+      for (const e of [...S.expenses].sort(sortDesc)) {
+        if (items.length >= 10) break;
+        const k = H.normalize(e.desc); if (!k || seen.has(k) || e.type === 'income') continue;
+        seen.add(k); items.push({ key: k, desc: e.desc, amount: e.split ? e.split.total : e.amount, cat: e.cat });
+      }
+    }
+    else if (words.length >= 2) items = H.autocomplete(S.expenses, words, autoOpen ? 8 : 3).filter(a => H.normalize(a.desc) !== H.normalize(txt));
+    if (autoOpen && !items.length) { box.innerHTML = '<div class="empty" style="padding:8px 6px">Aquí saldrán los conceptos que más apuntas.</div>'; return; }
     box.innerHTML = items.map(a => '<button type="button" data-k="' + esc(a.key) + '"><span>' + esc(catById(a.cat).emoji) + ' ' + esc(a.desc) + '</span><span>' + money(a.amount) + '</span></button>').join('');
-    box.onclick = ev => {
-      const b = ev.target.closest('button'); if (!b) return;
-      const a = items.find(i => i.key === b.dataset.k);
-      const hasAmount = draft && draft.amount;
-      qi.value = a.desc + ' ' + (hasAmount ? (draft.amount / 100).toString().replace('.', ',') : (a.amount / 100).toString().replace('.', ','));
-      draftCatManual = a.cat; updateDraft(); qi.focus();
-    };
+    box.onclick = ev => { const b = ev.target.closest('button[data-k]'); if (!b) return; const a = items.find(i => i.key === b.dataset.k); if (a) pickConcept(a); };
   }
+  $('#qDrop').onclick = () => { autoOpen = !autoOpen; $('#qDrop').classList.toggle('on', autoOpen); renderAuto(qi.value); };
+  paintQuick();
 
   /* ---------- Foto de ticket (OCR local) ---------- */
   let tessLoading = null;
@@ -416,11 +450,11 @@
         logger: m => { if (m.status === 'recognizing text') st.textContent = '📷 Leyendo el ticket… ' + Math.round(m.progress * 100) + ' %'; }
       });
       const r = H.parseReceipt(data.text);
-      if (!r.total) { st.textContent = 'No he encontrado el total. Escríbelo tú y lo guardo.'; qi.value = (r.store || '') + ' '; qi.focus(); updateDraft(); return; }
-      let txt = (r.store || 'Ticket') + ' ' + (r.total / 100).toFixed(2).replace('.', ',');
-      if (r.date && r.date !== todayISO()) { const d = H.fromISO(r.date); txt += ' ' + d.getDate() + '/' + (d.getMonth() + 1) + '/' + d.getFullYear(); }
-      qi.value = txt; updateDraft();
-      st.textContent = '✔️ Revisa que esté bien y pulsa Añadir.';
+      if (!r.total) { st.textContent = 'No he encontrado el total. Escríbelo tú y lo guardo.'; qi.value = r.store || ''; qa.focus(); paintQuick(); return; }
+      qi.value = r.store || 'Ticket'; qa.value = centsField(r.total);
+      if (r.date && r.date !== todayISO()) Q.date = r.date;
+      Q.type = 'expense'; Q.typeManual = true; paintQuick();
+      st.textContent = '✔️ Revisa que esté bien y pulsa Añadir gasto.';
       setTimeout(() => { st.hidden = true; }, 6000);
     } catch (e) {
       st.textContent = 'No he podido leer el ticket (' + e.message + '). Apúntalo a mano, son dos segundos.';
@@ -508,11 +542,11 @@
       const b = ev.target.closest('.shortcut'); if (!b) return;
       ev.preventDefault();
       const s = sugg.find(x => x.key === b.dataset.k);
-      qi.value = s.desc + ' '; draftCatManual = s.cat; updateDraft(); qi.focus();
+      qi.value = s.desc; Q.cat = s.cat; qa.value = ''; paintQuick(); qa.focus();
     };
 
     const recent = [...S.expenses].sort(sortDesc).slice(0, 4);
-    $('#recentList').innerHTML = recent.length ? recent.map(e => rowHTML(e, true)).join('') : '<div class="empty" style="padding:12px 8px">Aún no hay nada apuntado. Escribe arriba algo como <b>café 1,80</b> y pulsa Añadir. Los gastos que repitas aparecerán como atajos de un toque.</div>';
+    $('#recentList').innerHTML = recent.length ? recent.map(e => rowHTML(e, true)).join('') : '<div class="empty" style="padding:12px 8px">Aún no hay nada apuntado. Pon arriba el concepto y el importe y pulsa Añadir gasto. Los gastos que repitas aparecerán como atajos de un toque.</div>';
   }
 
   // Pagos programados: lista con aviso por pago
@@ -689,11 +723,12 @@
   function editSheet(e, opts) {
     opts = opts || {};
     const isNew = !e;
-    if (isNew) e = { amount: 0, desc: '', date: opts.date || todayISO(), type: 'expense', cat: 'otros' };
+    if (isNew) { const pre = opts.prefill || {}; e = { amount: pre.amount || 0, desc: pre.desc || '', date: opts.date || pre.date || todayISO(), type: pre.type || 'expense', cat: pre.cat || 'otros' }; }
     let type = e.type, cat = e.cat;
     let split = e.split ? JSON.parse(JSON.stringify(e.split)) : null;
+    if (isNew && opts.split) split = { total: e.amount, people: Array.isArray(opts.split) ? opts.split : [{ id: uid(), name: '', amount: e.amount ? Math.floor(e.amount / 2) : 0, paid: false }] };
     const total0 = split ? split.total : e.amount;
-    openSheet('<h3>' + (isNew ? 'Apuntar el ' + H.fromISO(e.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' }) : 'Editar movimiento') + '</h3>'
+    openSheet('<h3>' + (isNew ? (split ? '👥 Gasto compartido' : 'Apuntar el ' + H.fromISO(e.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })) : 'Editar movimiento') + '</h3>'
       + '<div class="seg seg-type"><button data-t="expense">Gasto</button><button data-t="income">Ingreso</button></div>'
       + '<label class="field"><span id="edAmtLbl">Importe (€)</span><input id="edAmount" inputmode="decimal" value="' + (total0 ? centsTxt(total0) : '') + '" placeholder="0,00"></label>'
       + '<label class="field"><span>Concepto</span><input id="edDesc" value="' + esc(e.desc) + '" placeholder="Cena, súper, gasolina…"></label>'
@@ -753,7 +788,7 @@
       };
       paint(); paintSplit();
       if (opts.focusSplit && split) setTimeout(() => { const f = split.people.find(p => !p.name); const rows = $$('.sp-row', sh); const i = split.people.indexOf(f); if (i >= 0 && rows[i]) $('.sp-name', rows[i]).focus(); }, 80);
-      if (isNew) setTimeout(() => amtIn.focus(), 60);
+      if (isNew && !split) setTimeout(() => amtIn.focus(), 60);
       $('#edRep', sh).onclick = ev => { const b = ev.target.closest('[data-f]'); if (b) { freq = b.dataset.f; paintRep(); } };
       $('#edRepN input', sh).onchange = ev => { notify = ev.target.checked; };
       $('.seg-type', sh).onclick = ev => { const b = ev.target.closest('button'); if (b) { type = b.dataset.t; if (type === 'expense' && cat === 'ingreso') cat = H.guessCategory($('#edDesc', sh).value, S.learned, cats()); paint(); } };
@@ -804,6 +839,7 @@
           const o = { amount: mine, desc, date, type, cat: fcat }; if (sp) o.split = sp;
           const it = addExpense(o);
           if (it && freq && type !== 'income') { applyRep(it); save(); renderAll(); }
+          if (opts.onSaved) opts.onSaved(it);
           return;
         }
         e.amount = mine; e.desc = desc; e.date = date; e.type = type; e.cat = fcat;
@@ -1105,6 +1141,8 @@
     $('#storageInfo').textContent = memoryOnly
       ? '⚠️ Este navegador no permite guardar datos: lo que apuntes se perderá al cerrar. Instala la app desde su enlace.'
       : S.expenses.length + ' movimientos guardados en este dispositivo.';
+    if (NATIVE && APP && APP.getInfo) APP.getInfo().then(i => { $('#storageInfo').textContent += ' · Versión ' + i.version; }).catch(() => {});
+    else $('#storageInfo').textContent += ' · Versión web';
   }
   $('#progBtn').onclick = scheduledSheet;
   $('#themeSeg').onclick = ev => { const b = ev.target.closest('[data-th]'); if (!b) return; S.settings.theme = b.dataset.th; save(); applyTheme(); renderAjustes(); };

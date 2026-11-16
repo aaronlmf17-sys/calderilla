@@ -35,21 +35,26 @@
     </div>
 
     <form class="quick card" id="quickForm" autocomplete="off">
-      <div class="quick-row">
-        <input id="quickInput" type="text" inputmode="text" enterkeyhint="done"
-               placeholder="¿Qué has gastado? café 1,80" aria-label="Añadir gasto">
+      <div class="q-top">
+        <div class="seg seg-mini" id="qType"><button type="button" data-t="expense">Gasto</button><button type="button" data-t="income">Ingreso</button></div>
         <label class="icon-btn" title="Foto del ticket" aria-label="Foto del ticket">
           <input type="file" id="ticketInput" accept="image/*" capture="environment" hidden>
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M9 3 7.2 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9Zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
         </label>
       </div>
-      <div class="preview" id="preview" hidden>
-        <button type="button" class="chip cat-chip" id="previewCat"></button>
-        <span class="preview-text" id="previewText"></span>
-        <button type="submit" class="btn-add" id="addBtn">Añadir</button>
+      <div class="qf"><span>Concepto</span>
+        <div class="q-field"><input id="quickInput" type="text" enterkeyhint="next" placeholder="Café, súper, cena…" aria-label="Concepto"><button type="button" class="q-drop" id="qDrop" aria-label="Ver mis conceptos habituales">▾</button></div>
       </div>
-      <div class="cat-picker" id="catPicker" hidden></div>
       <div class="auto" id="autoList"></div>
+      <div class="q-grid">
+        <label class="qf"><span>Importe</span><div class="q-field"><input id="qAmt" inputmode="decimal" enterkeyhint="done" placeholder="0,00" aria-label="Importe en euros"><span class="eur">€</span></div></label>
+        <label class="qf"><span>Fecha</span><input id="qDate" class="q-sel" type="date" aria-label="Fecha"></label>
+        <label class="qf" id="qCatF"><span>Categoría</span><select id="qCat" class="q-sel" aria-label="Categoría"></select></label>
+        <label class="qf" id="qSplitF"><span>¿Compartido?</span><select id="qSplit" class="q-sel" aria-label="¿Gasto compartido?"><option value="">No, solo yo</option><option value="1">Sí, con otros</option></select></label>
+        <label class="qf q-wide" id="qRepF"><span>¿Se repite?</span><select id="qRep" class="q-sel" aria-label="¿Se repite?"><option value="">No, es un gasto puntual</option><option value="week">Sí, cada semana</option><option value="month">Sí, cada mes</option><option value="year">Sí, cada año</option></select></label>
+      </div>
+      <div class="q-hint" id="qHint"></div>
+      <button type="submit" class="btn-primary" id="addBtn" disabled>Añadir gasto</button>
       <div class="ocr-status" id="ocrStatus" hidden></div>
     </form>
 
